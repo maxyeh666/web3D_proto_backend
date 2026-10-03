@@ -1,0 +1,27 @@
+{
+  "name": "web3d-proto-backend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Web 3D Viewer Backend — Asset API (prototype)",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^5.2.1",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.13.3",
+    "@types/pg": "^8.11.0",
+    "tsx": "^4.19.2",
+    "typescript": "~5.9.3"
+  }
+}
