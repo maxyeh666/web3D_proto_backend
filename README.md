@@ -24,18 +24,18 @@ PostgreSQL
 
 ### Phase 1 — Backend Foundation
 
-- [ ] Node.js + TypeScript
-- [ ] REST API
-- [ ] Project structure
-- [ ] Environment configuration
-- [ ] Basic error handling
+- [x] Node.js + TypeScript
+- [x] REST API（Express + `/health`）
+- [x] Project structure（`src/index.ts` / `db.ts` / `env.ts` / `migrate.ts`）
+- [x] Environment configuration（`.env` + `.env.example`）
+- [x] Basic error handling（錯誤處理中介層）
 
 ### Phase 2 — Database
 
-- [ ] PostgreSQL（本機安裝）
-- [ ] 資料存取方式（直接用 `pg` 寫 SQL）
-- [ ] Migration
-- [ ] Asset Model
+- [x] PostgreSQL（本機安裝）
+- [x] 資料存取方式（直接用 `pg` 寫 SQL）
+- [x] Migration（`migrate.ts` + `000` / `001`，`npm run migrate` 可重複跑）
+- [x] Asset Model（`assets` 資料表：`BIGINT` 主鍵 + `JSONB` + `TIMESTAMPTZ`）
 
 ### Phase 3 — Asset API
 
@@ -45,7 +45,7 @@ PostgreSQL
 - [ ] Request validation
 - [ ] API error handling
 
-> 目前產品只有一筆 `id` 為 `default` 的資產（前端一次只編輯一筆），
+> 目前產品只有一筆 `id` 為 `1` 的資產（前端一次只編輯一筆），
 > 因此 Phase 3 不做 `POST / DELETE`；`PATCH /assets/:id` 暫緩，之後依需求視情況實作。
 > 前端實際會呼叫的只有 `GET /assets/:id` 與 `PUT /assets/:id`
 > （`web3D_proto_react` 的 `src/hooks/useAssetConfig.ts`）。
@@ -99,18 +99,18 @@ Asset
 
 ```text
 assets 資料表
-├── id          (文字 / 主鍵)
+├── id          (BIGINT / 主鍵 / 自動編號)
 ├── name        (文字)
 ├── config      (JSONB)
-├── created_at  (時間)
-└── updated_at  (時間)
+├── created_at  (TIMESTAMPTZ)
+└── updated_at  (TIMESTAMPTZ)
 ```
 
 **API 資料形狀**
 
 ```json
 {
-  "id": "default",
+  "id": 1,
   "name": "Default Cube",
   "config": {
     "camera": { "position": [3, 5, 5], "fov": 60 },
@@ -124,14 +124,16 @@ assets 資料表
 
 ```text
 src/
-├── routes/
-├── services/
-├── db/
-├── schemas/
-└── ...
+├── index.ts        ← Express 進入點（路由 / 中介層）
+├── db.ts           ← PostgreSQL 連線池
+├── env.ts          ← 讀取 .env
+├── migrate.ts      ← 跑 migration 的程式
+└── migrations/     ← 資料庫變更紀錄（000_…、001_…）
+    ├── 000_create_schema_migrations.sql   ← 記錄表自己
+    └── 001_create_assets.sql              ← assets 表
 ```
 
-實際結構將於實作階段補上。
+實際結構如上；`routes/` / `services/` 等分層在 Phase 3 做 Asset API 時再補上。
 
 ## Related Project
 
