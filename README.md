@@ -16,6 +16,21 @@ Node.js
 PostgreSQL
 ```
 
+## Development
+
+```bash
+npm install
+
+# 複製 .env.example 為 .env，填入 DATABASE_URL
+
+npm run migrate   # 建立 schema_migrations / assets，並寫入第一筆預設資產
+npm run dev       # http://localhost:3000
+```
+
+其他指令：`npm run typecheck` / `npm run build` / `npm start`
+
+環境變數：`PORT`（預設 3000）、`CORS_ORIGIN`（前端來源，多個以逗號分隔）、`DATABASE_URL`
+
 ## Progress Log
 
 開發過程與設計決策見 [CHANGELOG.md](./CHANGELOG.md)。
@@ -34,16 +49,16 @@ PostgreSQL
 
 - [x] PostgreSQL（本機安裝）
 - [x] 資料存取方式（直接用 `pg` 寫 SQL）
-- [x] Migration（`migrate.ts` + `000` / `001`，`npm run migrate` 可重複跑）
+- [x] Migration（`migrate.ts` + `000` / `001` / `002`，`npm run migrate` 可重複跑）
 - [x] Asset Model（`assets` 資料表：`BIGINT` 主鍵 + `JSONB` + `TIMESTAMPTZ`）
 
 ### Phase 3 — Asset API
 
-- [ ] `GET /assets`
-- [ ] `GET /assets/:id`
-- [ ] `PUT /assets/:id`
-- [ ] Request validation
-- [ ] API error handling
+- [x] `GET /assets`
+- [x] `GET /assets/:id`
+- [x] `PUT /assets/:id`
+- [x] Request validation
+- [ ] API error handling（進行中：4xx / 500 的 JSON 回應已完成）
 
 > 目前產品只有一筆 `id` 為 `1` 的資產（前端一次只編輯一筆），
 > 因此 Phase 3 不做 `POST / DELETE`；`PATCH /assets/:id` 暫緩，之後依需求視情況實作。
@@ -83,6 +98,36 @@ PostgreSQL
 
 - PostgreSQL（以 `pg` 套件直接連線）
 
+## API
+
+| Method | Path | 說明 | 回應 |
+| --- | --- | --- | --- |
+| GET | `/health` | 服務狀態 | 200 |
+| GET | `/health/db` | 資料庫連線狀態 | 200 |
+| GET | `/assets` | 取得全部資產 | 200 `Asset[]` |
+| GET | `/assets/:id` | 取得單一資產 | 200 `Asset` |
+| PUT | `/assets/:id` | 更新單一資產 | 200 `Asset` |
+
+`PUT /assets/:id` 的請求內容（`id`、`updatedAt` 由資料庫維護，不接受前端指定）：
+
+```json
+{
+  "name": "Default Cube",
+  "config": {
+    "camera": { "position": [3, 5, 5], "fov": 60 },
+    "cube": { "color": "#999999" }
+  }
+}
+```
+
+錯誤回應統一為 `{ "error": "..." }`：
+
+- 400 — `id` 格式不合法 / 請求內容不合法 / 無法解析 JSON
+- 404 — 找不到該資產
+- 500 — 未預期錯誤
+
+驗證規則見 `src/validators/assetValidator.ts`。
+
 ## Asset
 
 Asset 的資料形狀（`web3D_proto_react` 的 `src/types/asset.ts`）：
@@ -110,7 +155,7 @@ assets 資料表
 
 ```json
 {
-  "id": 1,
+  "id": "1",
   "name": "Default Cube",
   "config": {
     "camera": { "position": [3, 5, 5], "fov": 60 },
@@ -124,16 +169,23 @@ assets 資料表
 
 ```text
 src/
-├── index.ts        ← Express 進入點（路由 / 中介層）
-├── db.ts           ← PostgreSQL 連線池
-├── env.ts          ← 讀取 .env
-├── migrate.ts      ← 跑 migration 的程式
-└── migrations/     ← 資料庫變更紀錄（000_…、001_…）
+├── index.ts              ← Express 進入點（中介層 / 路由掛載）
+├── db.ts                 ← PostgreSQL 連線池
+├── env.ts                ← 讀取 .env
+├── migrate.ts            ← 跑 migration 的程式
+├── routers/
+│   └── assets.ts         ← /assets 路由：HTTP 進出與狀態碼
+├── services/
+│   └── assetService.ts   ← Asset 的 SQL 與資料形狀轉換
+├── validators/
+│   └── assetValidator.ts ← 請求參數驗證
+└── migrations/           ← 資料庫變更紀錄（000_…、001_…、002_…）
     ├── 000_create_schema_migrations.sql   ← 記錄表自己
-    └── 001_create_assets.sql              ← assets 表
+    ├── 001_create_assets.sql              ← assets 表
+    └── 002_seed_default_asset.sql         ← 第一筆預設資產
 ```
 
-實際結構如上；`routes/` / `services/` 等分層在 Phase 3 做 Asset API 時再補上。
+分層：`routers` 只處理 HTTP（驗證、狀態碼），`services` 只處理 SQL 與資料形狀，`validators` 只做輸入驗證。
 
 ## Related Project
 
