@@ -1,6 +1,8 @@
 ﻿import { Router } from "express";
 import { listAssets, getAsset, updateAsset } from "../services/assetService.js";
 import { validateAssetId, validateUpdateAssetInput } from "../validators/assetValidator.js";
+import { AppError } from "../errors/error.js";
+import { ErrorCode } from "../errors/errorCode.js";
 
 const router = Router();
 
@@ -12,42 +14,24 @@ router.get("/", async (_req, res) => {
 
 router.get("/:id", async (req, res) => {
     const id = validateAssetId(req.params.id);
-    // 如果驗證失敗，回傳 400 Bad Request
-    if (!id) {
-        res.status(400).json({ error: "Invalid asset ID" });
-        return;
-    }
+
+    if (!id) throw new AppError(ErrorCode.INVALID_ASSET_ID)
+
     const asset = await getAsset(id);
-    // 如果找不到對應的資產(對應null)，回傳 404 Not Found
-    if (!asset) {
-        res.status(404).json({ error: "Asset not found" });
-        return;
-    }
     
     res.json(asset);
 });
 
 router.put("/:id", async (req, res) => {
     const id = validateAssetId(req.params.id);
-    // 如果驗證失敗，回傳 400 Bad Request
-    if (!id) {
-        res.status(400).json({ error: "Invalid asset ID" });
-        return;
-    }
+
+    if (!id) throw new AppError(ErrorCode.INVALID_ASSET_ID)
 
     const input = validateUpdateAssetInput(req.body)
 
-    if (input === null) {
-        res.status(400).json({ error: "Invalid request body" });
-        return;
-    }
+    if (input === null) throw new AppError(ErrorCode.INVALID_REQUEST_BODY)
 
     const asset = await updateAsset(id, input);
-    // 如果找不到對應的資產(對應null)，回傳 404 Not Found
-    if (!asset) {
-        res.status(404).json({ error: "Asset not found" });
-        return;
-    }
 
     res.json(asset);
 })

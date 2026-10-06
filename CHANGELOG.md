@@ -2,6 +2,36 @@
 
 開發日誌：依日期記錄後端各階段的變更與設計決策。每則包含背景（為何做）、變更（做了什麼）、設計決策（為何這樣做）、學習筆記、已知限制 / 後續。
 
+## 2026-10-06 — Phase 3：錯誤處理架構與收尾
+
+**背景**
+- Asset API 的三個端點已通，但錯誤回應各處手寫字串、未知路徑回 Express 預設 HTML、文件錯誤形狀與實作對不上，需要一次收成統一架構。
+
+**變更**
+- 新增 `errors/errorCode.ts`：`ErrorCode` 列舉（`INVALID_ASSET_ID` / `INVALID_REQUEST_BODY` / `ASSET_NOT_FOUND` / `ROUTE_NOT_FOUND` / `INTERNAL_SERVER_ERROR`），錯誤只用代碼傳遞，不手寫字串
+- 新增 `errors/errorDefinition.ts`：`Record<ErrorCode, { statusCode, message }>` 查表，狀態碼與訊息只有一份真相
+- 新增 `errors/error.ts`：`AppError` 只帶 `errorCode`，訊息統一查表取得
+- 新增 `errorHandler.ts`：三段分支——JSON 解析失敗轉 400（避免前端少打逗號被誤判為 500）、`AppError` 查表回對應狀態碼、其餘未預期錯誤記 log 後統一回 500（不漏堆疊追蹤給前端）
+- `routers/assets.ts`：`id` 格式不對拋 400（`INVALID_ASSET_ID`）、請求內容不合法拋 400（`INVALID_REQUEST_BODY`），只決定 HTTP 層的事
+- `services/assetService.ts`：找不到拋 404（`ASSET_NOT_FOUND`），回傳型別為 `Promise<Asset>`（找不到用拋錯，不回 `null`）
+- `index.ts`：新增 404 捕手，所有路由之後、`errorHandler` 之前，未知路徑拋 `ROUTE_NOT_FOUND`，統一轉成 JSON
+- `README.md`：錯誤形狀改為 `{ "error": { "code", "message" } }` 並列出五個 code；結構圖補上 `errorHandler.ts` + `errors/`；
+
+**設計決策**
+- 分層：`validators` 只檢查回 `null` 不碰 HTTP，`routers` 只決定 400，`services` 只決定 404，`errors` 只定義與查表，`errorHandler` 只轉 JSON——哪一層出錯、哪一層負責
+- 狀態碼與訊息只以 `errorDefinition` 為真相：改文案或狀態碼只改一處，`errorHandler` 不寫死數字就不會漏改
+- 未知路徑用專屬 `ROUTE_NOT_FOUND`：打錯路徑卻回 `ASSET_NOT_FOUND` 會誤導除錯（路徑錯卻說資產找不到），專屬代碼讓前端與 log 一眼分辨是路徑錯還是資料不存在
+
+**學習筆記**
+
+- 問：Express 的 `app.use((req, res, next) => { next(...) })` 裡，沒用到的 `req` 要寫 `void req;` 或改成 `_req` 是什麼意思？兩者有什麼差別？
+
+  答：`void req;` 是「假裝用一下」的動作（`void` 在這裡只是把變數讀一次、不做任何事），目的是堵住「宣告了卻沒用到」的警告；`_req` 開頭的底線是「我故意不用」的暗號，TypeScript 的 `noUnusedParameters`（沒用到的參數就報錯的設定）內建就認得，會直接跳過。兩者是同一個問題的兩種解法，用一種就好，不並存。
+
+  補充：本專案後端 `tsconfig.json` 根本沒開 `noUnusedParameters`，也沒裝 ESLint（檢查程式寫法的工具），所以兩種都不需要，`(req, res, next)` 直接寫沒問題。而且 TypeScript 有個例外：後面還有參數被用到（這裡的 `next`）時，前面的 `req`、`res` 不會被點名，因為位置參數不能亂拿掉。前端 `tsconfig.app.json` 有開這個檢查，所以同一個寫法在前端是真的會用到（例如後端 `src/routers/assets.ts` 的 `_req` 也是同一個暗號）。
+
+  注意：底線的涵義依語言而異，換語言時要重新確認，不要直接沿用這裡的理解。
+
 ## 2026-10-05 — Phase 3：Asset API 與 id 統一改為字串
 
 **背景**
@@ -17,7 +47,7 @@
 - 新增 `services/assetService.ts`：`listAssets` / `getAsset` / `updateAsset`，共用 `toAsset` 轉換
 - 新增 `validators/assetValidator.ts`：`id` 與請求內容驗證
 - 新增 `migrations/002_seed_default_asset.sql`：寫入第一筆預設資產
-- `index.ts`：`CORS_ORIGIN` 支援逗號分隔多來源；錯誤中介層區分 400（JSON 無法解析）與 500
+- `index.ts`：`CORS_ORIGIN` 支援逗號分隔多來源
 
 **設計決策**
 - id 一路用字串（資料庫 → API JSON → 前端型別全部是字串）：

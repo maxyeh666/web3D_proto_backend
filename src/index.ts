@@ -4,6 +4,9 @@ import cors from 'cors';
 // 這裡採用js副檔名是因為在NodeNext模式下，ts檔案會被編譯成js檔案，並且使用ESM模組系統，所以要使用.js副檔名來引入模組
 import { pool } from './db.js';
 import assetsRouter from './routers/assets.js';
+import { errorHandler } from "./errorHandler.js";
+import { AppError } from "./errors/error.js";
+import { ErrorCode } from "./errors/errorCode.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -18,7 +21,7 @@ app.use(cors({
 }));
 // 讓express解析request body為JSON格式
 app.use(express.json());
-// 將assetsRouter掛載到/app/assets路徑下，這樣所有以/assets開頭的請求都會交給assetsRouter處理
+// 將assetsRouter掛載到/assets路徑下，這樣所有以/assets開頭的請求都會交給assetsRouter處理
 app.use('/assets', assetsRouter);
 // server健康度測試
 app.get('/health', (req, res) => {
@@ -29,17 +32,13 @@ app.get('/health/db', async (req, res) => {
     const result = await pool.query('SELECT 1');
     res.json({ status: 'ok', database: result.rows[0] });
 });
+// 404捕手:沒有路由統一由此處裡
+// 因為依序加載，順序必須在所有路由之後，errorHandler之前
+app.use((req, res, next) => {
+    next(new AppError(ErrorCode.ROUTE_NOT_FOUND))
+})
 // error handling middleware，放在所有路由之後
-app.use((err: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    console.error(err);
-    // 無法解析json時回400避免造成誤解
-    if (err instanceof SyntaxError && "body" in (err as object)) {
-        res.status(400).json({ error: 'Invalid JSON' })
-        return
-    }
-
-    res.status(500).json({ error: 'Internal Server Error' });
-});
+app.use(errorHandler);
 
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);

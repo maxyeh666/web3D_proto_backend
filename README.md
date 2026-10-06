@@ -58,7 +58,7 @@ npm run dev       # http://localhost:3000
 - [x] `GET /assets/:id`
 - [x] `PUT /assets/:id`
 - [x] Request validation
-- [ ] API error handling（進行中：4xx / 500 的 JSON 回應已完成）
+- [x] API error handling（4xx / 500 的統一 JSON 回應）
 
 > 目前產品只有一筆 `id` 為 `1` 的資產（前端一次只編輯一筆），
 > 因此 Phase 3 不做 `POST / DELETE`；`PATCH /assets/:id` 暫緩，之後依需求視情況實作。
@@ -120,11 +120,11 @@ npm run dev       # http://localhost:3000
 }
 ```
 
-錯誤回應統一為 `{ "error": "..." }`：
+錯誤回應統一為 `{ "error": { "code", "message" } }`：
 
-- 400 — `id` 格式不合法 / 請求內容不合法 / 無法解析 JSON
-- 404 — 找不到該資產
-- 500 — 未預期錯誤
+- 400 — `INVALID_ASSET_ID` / `INVALID_REQUEST_BODY`
+- 404 — `ASSET_NOT_FOUND` / `ROUTE_NOT_FOUND`
+- 500 — `INTERNAL_SERVER_ERROR`
 
 驗證規則見 `src/validators/assetValidator.ts`。
 
@@ -173,6 +173,11 @@ src/
 ├── db.ts                 ← PostgreSQL 連線池
 ├── env.ts                ← 讀取 .env
 ├── migrate.ts            ← 跑 migration 的程式
+├── errorHandler.ts       ← 統一轉成 JSON 回應
+├── errors/               ← ErrorCode + 錯誤查表 + AppError
+│   ├── errorCode.ts      ← 錯誤代碼
+│   ├── errorDefinition.ts ← 狀態碼與訊息查表
+│   └── error.ts          ← AppError
 ├── routers/
 │   └── assets.ts         ← /assets 路由：HTTP 進出與狀態碼
 ├── services/
@@ -185,7 +190,7 @@ src/
     └── 002_seed_default_asset.sql         ← 第一筆預設資產
 ```
 
-分層：`routers` 只處理 HTTP（驗證、狀態碼），`services` 只處理 SQL 與資料形狀，`validators` 只做輸入驗證。
+分層：`routers` 只處理 HTTP（驗證、狀態碼），`services` 只處理 SQL 與資料形狀，`validators` 只做輸入驗證，`errors` 只定義錯誤與查表，`errorHandler` 只轉 JSON。
 
 ## Related Project
 

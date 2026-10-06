@@ -1,5 +1,7 @@
 ﻿import { pool } from "../db.js";
 import type { UpdateAssetInput } from "../validators/assetValidator.js"
+import { AppError } from "../errors/error.js";
+import { ErrorCode } from "../errors/errorCode.js";
 
 // Asset: API 回傳形狀（給前端 / res.json 用）
 export type Asset = {
@@ -31,7 +33,7 @@ export async function listAssets(): Promise<Asset[]> {
     return result.rows.map((row) => (toAsset(row)));
 }
 // getAsset: 取得單一資產
-export async function getAsset(id: string): Promise<Asset | null> {
+export async function getAsset(id: string): Promise<Asset> {
     // 使用參數化查詢，避免 SQL Injection
     const result = await pool.query<AssetRow>(`SELECT
         id, 
@@ -42,15 +44,13 @@ export async function getAsset(id: string): Promise<Asset | null> {
         WHERE id = $1`, [id]);
     // 取得第一列資料（如果有的話）
     const row = result.rows[0];
-    // 如果找不到對應的資產，回傳 null
-    if (!row) {
-        return null;
-    }
+    // 如果找不到對應的資產，拋出404 ASSET_NOT_FOUND
+    if (!row) throw new AppError(ErrorCode.ASSET_NOT_FOUND)
 
     return toAsset(row);
 }
 // updateAsset: 更新單一資產
-export async function updateAsset(id: string, input: UpdateAssetInput): Promise<Asset | null> {
+export async function updateAsset(id: string, input: UpdateAssetInput): Promise<Asset> {
     // RETURNING 是 PostgreSQL 的一個特性，可以在 UPDATE 語句中回傳更新後的資料列
     const result = await pool.query<AssetRow>(
         `UPDATE assets SET
@@ -62,13 +62,11 @@ export async function updateAsset(id: string, input: UpdateAssetInput): Promise<
 
     const row = result.rows[0];
 
-    if (!row) {
-        return null;
-    }
+    if (!row) throw new AppError(ErrorCode.ASSET_NOT_FOUND)
 
     return toAsset(row);
 }
-// 共用寫入asset
+// toAsset: 把資料庫列轉成 API 回傳形狀（Date 轉 ISO 字串）
 function toAsset(row: AssetRow): Asset {
     return {
         id: row.id,
