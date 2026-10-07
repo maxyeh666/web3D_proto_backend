@@ -3,12 +3,18 @@ import type { UpdateAssetInput } from "../validators/assetValidator.js"
 import { AppError } from "../errors/error.js";
 import { ErrorCode } from "../errors/errorCode.js";
 
-// Asset: API 回傳形狀（給前端 / res.json 用）
+// Asset: API 回傳形狀（單筆，給 get / update / res.json 用）
 export type Asset = {
     id: string;
     name: string;
     config: unknown;
     updatedAt: string;
+}
+
+// AssetSummary: 列表用形狀（只回辨識欄位，不含 config）
+export type AssetSummary = {
+    id: string;
+    name: string;
 }
 // AssetRow: 資料庫列的實際形狀（pg 回傳的型別）
 // - BIGINT      → string（pg 的安全設計，避免超出 JS number 範圍）
@@ -21,16 +27,14 @@ type AssetRow = {
     updatedAt: Date;
 }
 
-// listAssets: 取得全部資產
-export async function listAssets(): Promise<Asset[]> {
-    const result = await pool.query<AssetRow>(`SELECT
-        id, 
-        name, 
-        config, 
-        updated_at AS "updatedAt"
-        FROM assets 
+// listAssets: 取得全部資產（摘要，只回辨識欄位）
+export async function listAssets(): Promise<AssetSummary[]> {
+    const result = await pool.query<AssetSummary>(`SELECT
+        id,
+        name
+        FROM assets
         ORDER BY id ASC`);
-    return result.rows.map((row) => (toAsset(row)));
+    return result.rows;
 }
 // getAsset: 取得單一資產
 export async function getAsset(id: string): Promise<Asset> {

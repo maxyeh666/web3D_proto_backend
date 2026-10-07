@@ -60,17 +60,18 @@ npm run dev       # http://localhost:3000
 - [x] Request validation
 - [x] API error handling（4xx / 500 的統一 JSON 回應）
 
-> 目前產品只有一筆 `id` 為 `1` 的資產（前端一次只編輯一筆），
-> 因此 Phase 3 不做 `POST / DELETE`；`PATCH /assets/:id` 暫緩，之後依需求視情況實作。
-> 前端實際會呼叫的只有 `GET /assets/:id` 與 `PUT /assets/:id`
+> 目前產品只有一筆 `id` 為 `1` 的資產（前端一次只編輯一筆）。
+> 這個後端是給 3D Viewer 用的：資產由種子資料（或之後的後台）提供，App 本身不新增、也不刪除資產，
+> 所以沒有 `POST` / `DELETE`；`PATCH /assets/:id` 暫緩，之後依需求視情況實作。
+> 前端會用到的就是 `GET /assets`（挑一筆）、`GET /assets/:id`（拿完整內容）、`PUT /assets/:id`（存回去）
 > （`web3D_proto_react` 的 `src/hooks/useAssetConfig.ts`）。
 
 ### Phase 4 — Frontend Integration
 
-- [ ] Connect React Viewer
-- [ ] Load Asset
-- [ ] Save (Update) Asset
-- [ ] Loading / Error handling
+- [x] Connect React Viewer
+- [x] Load Asset
+- [x] Save (Update) Asset
+- [x] Loading / Error handling
 
 ### Phase 5 — API Documentation
 
@@ -104,7 +105,7 @@ npm run dev       # http://localhost:3000
 | --- | --- | --- | --- |
 | GET | `/health` | 服務狀態 | 200 |
 | GET | `/health/db` | 資料庫連線狀態 | 200 |
-| GET | `/assets` | 取得全部資產 | 200 `Asset[]` |
+| GET | `/assets` | 取得全部資產（摘要，只含辨識欄位） | 200 `AssetSummary[]` |
 | GET | `/assets/:id` | 取得單一資產 | 200 `Asset` |
 | PUT | `/assets/:id` | 更新單一資產 | 200 `Asset` |
 
@@ -163,6 +164,14 @@ assets 資料表
   },
   "updatedAt": "2026-10-03T00:00:00.000Z"
 }
+```
+
+`GET /assets` 回摘要 `AssetSummary[]`（只含辨識欄位），完整內容用 `GET /assets/:id`：
+
+```json
+[
+  { "id": "1", "name": "Default Cube" }
+]
 ```
 
 ## Project Structure

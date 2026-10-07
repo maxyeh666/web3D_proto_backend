@@ -2,6 +2,31 @@
 
 開發日誌：依日期記錄後端各階段的變更與設計決策。每則包含背景（為何做）、變更（做了什麼）、設計決策（為何這樣做）、學習筆記、已知限制 / 後續。
 
+## 2026-10-07 — Phase 3：列表改回摘要，單筆維持完整
+
+**背景**
+- `GET /assets` 原本回完整 `Asset[]`（含整包 `config`），但列表的功能是「挑哪一筆」，不需要把整包場景設定撈出來。
+- 前端實際編輯的是某一筆資產（`GET /assets/:id` + `PUT /assets/:id`），列表摘要化後 `get` 名正言順——這是一次破壞性變更（breaking change：回應形狀改變），前端同步跟進。
+
+**變更**
+- `services/assetService.ts`：新增 `AssetSummary = { id, name }`；`listAssets()` 改為只 `SELECT id, name`，回傳 `Promise<AssetSummary[]>`，直接回 `result.rows`（不經 `toAsset` 轉換）
+- `getAsset` / `updateAsset` 維持回完整 `Asset`；`routers` / `validators` 不動
+- `README.md`：`GET /assets` 回應改為 `AssetSummary[]`，補上列表資料形狀範例
+
+**設計決策**
+- 列表只回辨識欄位（`id`、`name`）：列表是「菜單」，完整 `config` 只在 `get` 拿；避免每筆都序列化傳輸整包 JSONB
+- `AssetSummary` 不做 `updatedAt` 轉換：只有 `string` 欄位，無需 `toAsset` 那層 Date 轉 ISO
+- `getAsset` / `updateAsset` 的 `AssetRow` 與 `toAsset` 保留：它們仍需要處理 `Date` 轉 ISO
+
+**學習筆記**
+- 問：什麼是「破壞性變更（breaking change）」？這次把 `GET /assets` 的回應從完整 `Asset[]` 改成摘要 `{ id, name }[]`，為什麼算？
+  答：破壞性變更指的是「改了之後，原本照舊使用的人會壞掉」的改動。這次 `GET /assets` 回傳的資料形狀變了（每筆少了 `config`、`updatedAt` 等欄位），任何原本直接拿 `config` 來用的前端程式都會拿到 undefined 而壞掉——即使後端本身運作正常，對使用它的那一端仍是破壞性的。這種改動必須前後端一起改、一起上線，不能只改一邊，所以要特別標出來提醒。
+- 問：要「重新套用」現有的 migration（資料庫變更）時，為什麼是保留 `schema_migrations` 記錄表、只刪掉裡面的記錄再重跑，而不是把整個資料庫砍掉重練？
+  答：`migrate.ts` 是看 `schema_migrations`（記錄哪支 migration 跑過的表）決定每一支要「跳過」還是「重跑」：記錄還在就跳過，記錄被刪掉就重跑。所以只刪某幾支的記錄，就能只重跑那幾支、其餘照樣跳過，不用整庫歸零。但要注意「刪記錄只影響跑不跑，不會把已經造成的結果還原」：`001` 是 `CREATE TABLE assets`（沒有 `IF NOT EXISTS`），表還在的話重跑會直接報「資料表已存在」；`002` 是 `INSERT` 種子資料，重跑會再多插一筆。所以能重跑的前提是，先把要重建的表（`assets`）也砍掉、再刪掉對應記錄，讓那幾支從乾淨狀態重跑一次。（`000` 例外：它用 `CREATE TABLE IF NOT EXISTS` 且每次都會跑，不受記錄影響。）
+
+**已知限制 / 後續**
+- 目前產品只有一筆 `id` 為 `1` 的資產；多筆資產的選擇介面出現時，直接沿用 `GET /assets` 摘要
+
 ## 2026-10-06 — Phase 3：錯誤處理架構與收尾
 
 **背景**
@@ -124,49 +149,6 @@
 
   要注意 CORS 是**瀏覽器在擋，不是伺服器在擋**：用 curl、Postman 或伺服器對伺服器呼叫都沒有這道限制，所以「前端被擋」不等於「API 沒人能打」；反過來，把 `Access-Control-Allow-Origin` 設成 `*` 等於對所有網站開放，正式環境應該用白名單。
 
-## 2026-10-03 — 專案初始化與技術選擇
-
-**背景**
-- 前端 Proto 已完成資料存取接縫（`AssetRepository`），後端要開始實作 Asset API。
-- 後端目前是空的 TypeScript 骨架，逐步依 README 的 Roadmap 實作。
-
-**設計決策**
-- 選 Express 5 而非 Fastify / NestJS：生態最普及、範例與社群資源最多，初學者入門不需過重的框架
-- Express 5 而非 4：`async` 函式出錯會自動轉給錯誤處理中介層，不用自己包 `try/catch`
-- 資料庫用本機 PostgreSQL，不使用 Docker：本機安裝即可，原型階段不需要多一層容器。Docker 是一種把程式連同環境包起來跑的工具（例如把 Node 加資料庫包成一個可攜帶的環境），本專案暫時用不到，先不加這一層複雜度
-- 資料庫存取直接用 `pg`（連接 PostgreSQL 的套件，寫法是把 SQL 字串傳進去）寫 SQL，暫不引入 ORM
-- Asset 的 `config` 整包存成一欄：內容會隨資產類型變化，整包存之後新增資產類型不用改資料表結構。`config` 欄位用 JSONB（PostgreSQL 存 JSON 的二進位格式：寫入比 JSON 慢一點點，但處理快很多、還能建索引，官方建議預設用它）
-- 資料庫保留 `created_at`，但 API 只回傳前端需要的欄位（`id` / `name` / `config` / `updatedAt`），讓前後端契約一致
-
-**學習筆記**
-
-- 問：什麼是建索引？聽說後端改善效能通常會加這個，為什麼不一開始就建？
-  答：索引（Index）是資料庫的目錄：沒建的話，查一筆資料要整張表從頭翻到尾；建了之後可以直接翻目錄定位，幾百萬筆時差很多。但它有代價：每次寫入或更新都要順手更新目錄，所以寫入會變慢一點，也會多佔空間；而且加錯地方（例如在幾乎不查的欄位上建）等於白付代價還拖慢寫入。所以實務上是先不建，等真的慢了、用慢查詢紀錄找到瓶頸在哪一欄，再針對那一欄建。
-
-- 問：慢查詢（Slow query）是什麼？跟普通查詢有什麼差別？
-  答：慢查詢不是一種特別的語法，就是普通的 SQL，只是跑得太慢、超過資料庫設定的時間（例如超過 1 秒）被記下來。資料庫會自動把這些超時的查詢寫進一份慢查詢紀錄，後端要優化效能時就先看這份紀錄：最常出現、跑最久的那幾條，就是要修的目標，加索引通常就是加在這些查詢用到的欄位上。普通查詢跟慢查詢的差別只在「有沒有超時被記下來」，寫法上完全一樣
-
-- 問：JSONB 是什麼？跟 JSON 差在哪？為什麼 `config` 要用它？
-  答：JSONB（PostgreSQL 存 JSON 的二進位格式）跟 JSON 的差別是取捨：JSON 存的是原文，寫入快、但每次查詢都要重新解析；JSONB 存之前要多一道轉換所以寫入慢一點點，但查詢快很多、還能建索引。官方文件說預設用 JSONB，除非有特殊需求（例如要保留鍵的順序）。本專案 `config` 讀得多寫得少，所以用 JSONB
-
-- 問：REST API 是什麼？常聽到的 RESTful 又是什麼意思，兩者有什麼關係？
-  答：REST API 是「用網址代表東西、用 HTTP 方法代表動作」的一種寫 API 的風格，例如 `GET /assets/abc` 就是「拿 id 是 abc 的資產」。RESTful 是形容詞，意思是「這支 API 有照 REST 的風格寫」，所以會說「這是一支 RESTful 的 API」。本專案的 `GET /assets`、`GET /assets/:id`、`PUT /assets/:id` 就是照這個風格設計的。反例：`GET /getAssetById?id=abc`（動作寫在網址裡，方法永遠只用 GET）、`POST /assets/delete`（用 POST 做刪除，動作跟方法對不上），這兩種就不算 RESTful
-
-- 問：後端會不會像前端一樣，因為相依性被卡住而停在舊版？
-  答：不會。後端套件（express / cors / dotenv / tsx）幾乎沒有對別的套件的版本要求（peerDependencies），可以各自獨立升級；不像前端的 React / three 生態，動一個就要動一串。版本鎖定靠 `package-lock.json`（記錄「實際裝了哪一版」），`package.json` 的 `^` / `~` 只是「允許的範圍」，lockfile 要進版控
-
-- 問：ORM 是什麼？
-  答：ORM（Object-Relational Mapping）把資料庫表格對應成程式裡的物件，不用手寫 SQL，例如 `prisma.asset.findUnique({ where: { id } })` 就等於 `SELECT ... WHERE id = ...`。本專案先用 `pg` 手寫 SQL，因為端點少、查詢單純，先把 SQL 基礎學扎實
-
-- 問：既然有 ORM 這種方便的工具，為什麼上班時後端還要自己寫 SQL？改表格還要經過運維處理，是架構不同還是語言的問題？
-  答：跟語言無關。複雜查詢用 ORM 寫起來彆扭、效能也要自己掌控，所以很多公司照樣手寫 SQL；而且就算用了 ORM，改表格這一關還是要審核——改錯一張表會影響所有用到它的服務，ORM 的自動改表是一鍵執行的，跳過了審核這一關
-
-- 問：OpenAPI 是什麼？公司內部的實務開發會這樣處理嗎？
-  答：OpenAPI 是一種寫 API 規格的標準格式，寫好後可以用 Swagger 這類工具自動產生可瀏覽的文件頁面。多數團隊公司內部沒有專門做，這是常態。本專案的做法是 Phase 5 再補，而且不用手刻 yaml，改用註解加工具自動產生（例如 swagger-jsdoc 加 swagger-ui-express），文件頁面掛在 `/docs`
-
-**已知限制 / 後續**
-- 目前產品只有一筆 `id` 為 `1` 的資產，因此 Phase 3 只做 `GET /assets`、`GET /assets/:id`、`PUT /assets/:id`；`POST` / `DELETE` / `PATCH` 等前端有多場景管理功能後再依需求補上
-
 ## 2026-10-04 — assets 資料表 id 與時間欄位型別
 
 **背景**
@@ -214,3 +196,46 @@
 
 **已知限制 / 後續**
 - 前端 `id` 已改成數字，對齊後端 `BIGINT`
+
+## 2026-10-03 — 專案初始化與技術選擇
+
+**背景**
+- 前端 Proto 已完成資料存取接縫（`AssetRepository`），後端要開始實作 Asset API。
+- 後端目前是空的 TypeScript 骨架，逐步依 README 的 Roadmap 實作。
+
+**設計決策**
+- 選 Express 5 而非 Fastify / NestJS：生態最普及、範例與社群資源最多，初學者入門不需過重的框架
+- Express 5 而非 4：`async` 函式出錯會自動轉給錯誤處理中介層，不用自己包 `try/catch`
+- 資料庫用本機 PostgreSQL，不使用 Docker：本機安裝即可，原型階段不需要多一層容器。Docker 是一種把程式連同環境包起來跑的工具（例如把 Node 加資料庫包成一個可攜帶的環境），本專案暫時用不到，先不加這一層複雜度
+- 資料庫存取直接用 `pg`（連接 PostgreSQL 的套件，寫法是把 SQL 字串傳進去）寫 SQL，暫不引入 ORM
+- Asset 的 `config` 整包存成一欄：內容會隨資產類型變化，整包存之後新增資產類型不用改資料表結構。`config` 欄位用 JSONB（PostgreSQL 存 JSON 的二進位格式：寫入比 JSON 慢一點點，但處理快很多、還能建索引，官方建議預設用它）
+- 資料庫保留 `created_at`，但 API 只回傳前端需要的欄位（`id` / `name` / `config` / `updatedAt`），讓前後端契約一致
+
+**學習筆記**
+
+- 問：什麼是建索引？聽說後端改善效能通常會加這個，為什麼不一開始就建？
+  答：索引（Index）是資料庫的目錄：沒建的話，查一筆資料要整張表從頭翻到尾；建了之後可以直接翻目錄定位，幾百萬筆時差很多。但它有代價：每次寫入或更新都要順手更新目錄，所以寫入會變慢一點，也會多佔空間；而且加錯地方（例如在幾乎不查的欄位上建）等於白付代價還拖慢寫入。所以實務上是先不建，等真的慢了、用慢查詢紀錄找到瓶頸在哪一欄，再針對那一欄建。
+
+- 問：慢查詢（Slow query）是什麼？跟普通查詢有什麼差別？
+  答：慢查詢不是一種特別的語法，就是普通的 SQL，只是跑得太慢、超過資料庫設定的時間（例如超過 1 秒）被記下來。資料庫會自動把這些超時的查詢寫進一份慢查詢紀錄，後端要優化效能時就先看這份紀錄：最常出現、跑最久的那幾條，就是要修的目標，加索引通常就是加在這些查詢用到的欄位上。普通查詢跟慢查詢的差別只在「有沒有超時被記下來」，寫法上完全一樣
+
+- 問：JSONB 是什麼？跟 JSON 差在哪？為什麼 `config` 要用它？
+  答：JSONB（PostgreSQL 存 JSON 的二進位格式）跟 JSON 的差別是取捨：JSON 存的是原文，寫入快、但每次查詢都要重新解析；JSONB 存之前要多一道轉換所以寫入慢一點點，但查詢快很多、還能建索引。官方文件說預設用 JSONB，除非有特殊需求（例如要保留鍵的順序）。本專案 `config` 讀得多寫得少，所以用 JSONB
+
+- 問：REST API 是什麼？常聽到的 RESTful 又是什麼意思，兩者有什麼關係？
+  答：REST API 是「用網址代表東西、用 HTTP 方法代表動作」的一種寫 API 的風格，例如 `GET /assets/abc` 就是「拿 id 是 abc 的資產」。RESTful 是形容詞，意思是「這支 API 有照 REST 的風格寫」，所以會說「這是一支 RESTful 的 API」。本專案的 `GET /assets`、`GET /assets/:id`、`PUT /assets/:id` 就是照這個風格設計的。反例：`GET /getAssetById?id=abc`（動作寫在網址裡，方法永遠只用 GET）、`POST /assets/delete`（用 POST 做刪除，動作跟方法對不上），這兩種就不算 RESTful
+
+- 問：後端會不會像前端一樣，因為相依性被卡住而停在舊版？
+  答：不會。後端套件（express / cors / dotenv / tsx）幾乎沒有對別的套件的版本要求（peerDependencies），可以各自獨立升級；不像前端的 React / three 生態，動一個就要動一串。版本鎖定靠 `package-lock.json`（記錄「實際裝了哪一版」），`package.json` 的 `^` / `~` 只是「允許的範圍」，lockfile 要進版控
+
+- 問：ORM 是什麼？
+  答：ORM（Object-Relational Mapping）把資料庫表格對應成程式裡的物件，不用手寫 SQL，例如 `prisma.asset.findUnique({ where: { id } })` 就等於 `SELECT ... WHERE id = ...`。本專案先用 `pg` 手寫 SQL，因為端點少、查詢單純，先把 SQL 基礎學扎實
+
+- 問：既然有 ORM 這種方便的工具，為什麼上班時後端還要自己寫 SQL？改表格還要經過運維處理，是架構不同還是語言的問題？
+  答：跟語言無關。複雜查詢用 ORM 寫起來彆扭、效能也要自己掌控，所以很多公司照樣手寫 SQL；而且就算用了 ORM，改表格這一關還是要審核——改錯一張表會影響所有用到它的服務，ORM 的自動改表是一鍵執行的，跳過了審核這一關
+
+- 問：OpenAPI 是什麼？公司內部的實務開發會這樣處理嗎？
+  答：OpenAPI 是一種寫 API 規格的標準格式，寫好後可以用 Swagger 這類工具自動產生可瀏覽的文件頁面。多數團隊公司內部沒有專門做，這是常態。本專案的做法是 Phase 5 再補，而且不用手刻 yaml，改用註解加工具自動產生（例如 swagger-jsdoc 加 swagger-ui-express），文件頁面掛在 `/docs`
+
+**已知限制 / 後續**
+- 目前產品只有一筆 `id` 為 `1` 的資產，因此 Phase 3 只做 `GET /assets`、`GET /assets/:id`、`PUT /assets/:id`；`POST` / `DELETE` / `PATCH` 等前端有多場景管理功能後再依需求補上
