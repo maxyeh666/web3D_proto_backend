@@ -63,6 +63,7 @@
 - `/health/db` 失敗回 500（走既有 `errorHandler`），不是 503：健康檢查語意上 503 更準確，但這是沿用既有錯誤架構的取捨
 - Windows 上無法送出真正的 SIGTERM（會被直接終止），關機流程只能用 `process.emit('SIGTERM')` 模擬或以 Render 端觀察驗證
 - 部署後要在 Render log 開頭確認 `Using Node version v24.x.x`，證明 `engines` 生效
+- 免費方案雲端 DB（Neon）閒置會暫停，喚醒時首次連線可能較慢：表現為 `/health/db` 或首個 API 請求延遲偏高、甚至觸發 `connectionTimeoutMillis`；後續需決定處理方式（例如首次請求重試、前端載入狀態提示、或評估付費方案；已決定維持免費方案，解法另行討論）
 
 ## 2026-10-07 — Phase 3：列表改回摘要，單筆維持完整
 

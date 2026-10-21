@@ -81,10 +81,10 @@ npm run dev       # http://localhost:3000
 
 ### Phase 6 — Deployment
 
-- [ ] 後端部署到託管平台
-- [ ] 資料庫改用雲端 PostgreSQL
-- [ ] 設定正式環境變數（`PORT`、`DATABASE_URL`、`CORS_ORIGIN`）
-- [ ] 前端 `VITE_API_BASE_URL` 改指正式後端網址
+- [x] 後端部署到託管平台
+- [x] 資料庫改用雲端 PostgreSQL
+- [x] 設定正式環境變數（`PORT`、`DATABASE_URL`、`CORS_ORIGIN`）
+- [ ] 處理雲端 DB 休眠喚醒（Neon 閒置暫停後首次連線延遲與逾時）
 
 部署筆記（Render）：
 - Build Command 用 `npm ci && npm run migrate && npm run build`，Start Command 用 `npm run start`。build 階段會先自動跑 migration 再編譯；`npm run build` 只做 `tsc`，不會把 `src/migrations/*.sql` 複製到 `dist/`。若 Render build 失敗（例如某支 migration 有誤），該次部署會被取消、舊版本繼續運作，線上服務不受影響。
