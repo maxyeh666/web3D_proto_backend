@@ -62,7 +62,7 @@ npm run dev       # http://localhost:3000
 
 > 目前產品只有一筆 `id` 為 `1` 的資產（前端一次只編輯一筆）。
 > 這個後端是給 3D Viewer 用的：資產由種子資料（或之後的後台）提供，App 本身不新增、也不刪除資產，
-> 所以沒有 `POST` / `DELETE`；`PATCH /assets/:id` 暫緩，之後依需求視情況實作。
+> 所以沒有 `POST` / `DELETE`；`PATCH /assets/:id` 暫不實作，日後依需求評估。
 > 前端會用到的就是 `GET /assets`（挑一筆）、`GET /assets/:id`（拿完整內容）、`PUT /assets/:id`（存回去）
 > （`web3D_proto_react` 的 `src/hooks/useAssetConfig.ts`）。
 
@@ -86,6 +86,12 @@ npm run dev       # http://localhost:3000
 - [ ] 設定正式環境變數（`PORT`、`DATABASE_URL`、`CORS_ORIGIN`）
 - [ ] 前端 `VITE_API_BASE_URL` 改指正式後端網址
 
+部署筆記（Render）：
+- Build Command 用 `npm ci && npm run migrate && npm run build`，Start Command 用 `npm run start`。build 階段會先自動跑 migration 再編譯；`npm run build` 只做 `tsc`，不會把 `src/migrations/*.sql` 複製到 `dist/`。若 Render build 失敗（例如某支 migration 有誤），該次部署會被取消、舊版本繼續運作，線上服務不受影響。
+- `/health/db` 成功回 200（含 `durationMs`），資料庫連不上時回 500。
+- 連線池的 `statement_timeout: 5000` 同時套用到 `migrate.ts`（同一顆 pool），超過 5 秒的 migration 會被中斷。
+- 部署後驗證：`/health/db` 有 `durationMs`、`/assets` 的 CORS 標頭正確、`/assets/999` 回 404、前端改色後 Save 並重載仍保留、Render log 開頭有 `Using Node version v24.x.x`。
+
 ## Tech Stack
 
 ### Backend
@@ -104,7 +110,7 @@ npm run dev       # http://localhost:3000
 | Method | Path | 說明 | 回應 |
 | --- | --- | --- | --- |
 | GET | `/health` | 服務狀態 | 200 |
-| GET | `/health/db` | 資料庫連線狀態 | 200 |
+| GET | `/health/db` | 資料庫連線狀態 | 200 `{ status, database: { connected }, durationMs }`，DB 不可用時 500 |
 | GET | `/assets` | 取得全部資產（摘要，只含辨識欄位） | 200 `AssetSummary[]` |
 | GET | `/assets/:id` | 取得單一資產 | 200 `Asset` |
 | PUT | `/assets/:id` | 更新單一資產 | 200 `Asset` |

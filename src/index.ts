@@ -28,9 +28,16 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok' });
 });
 // db狀況測試
-app.get('/health/db', async (req, res) => {
+// Express 5 會自動接住 async handler 的 reject 並交給 errorHandler，不需要自己 try/catch
+app.get('/health/db', async (_req, res) => {
+    const startAt = Date.now();
     const result = await pool.query('SELECT 1');
-    res.json({ status: 'ok', database: result.rows[0] });
+
+    res.json({
+        status: 'ok',
+        database: { connected: true },
+        durationMs: Date.now() - startAt
+    });
 });
 // 404捕手:沒有路由統一由此處裡
 // 因為依序加載，順序必須在所有路由之後，errorHandler之前
@@ -40,6 +47,33 @@ app.use((req, res, next) => {
 // error handling middleware，放在所有路由之後
 app.use(errorHandler);
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
-})
+});
+// 收到終止訊號時先停止接受新請求，再關閉資料庫連線（Render 重新部署時會送 SIGTERM）
+let isShuttingDown = false;
+
+function shutdown() {
+    // 平台或使用者可能重送訊號（例如連按兩次 Ctrl+C），只跑一次避免重複關閉
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
+    // 保險：若還有請求卡住，10 秒後強制結束，不要讓平台直接砍掉
+    setTimeout(() => {
+        console.error('[shutdown] Forced exit after 10s: server or pool did not close in time');
+        process.exit(1);
+    }, 10_000).unref();
+
+    // 先關閒置的 keep-alive 連線，server.close() 才會立刻回呼（Node 18 不會自動關）
+    server.closeIdleConnections();
+
+    // 先停止接受新請求，再關資料庫連線
+    server.close(() => {
+        pool.end()
+            .catch((error) => console.error('[shutdown] Failed to close database pool', error))
+            .finally(() => process.exit(0));
+    });
+}
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);

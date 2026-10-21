@@ -2,11 +2,73 @@
 
 開發日誌：依日期記錄後端各階段的變更與設計決策。每則包含背景（為何做）、變更（做了什麼）、設計決策（為何這樣做）、學習筆記、已知限制 / 後續。
 
+## 2026-10-21 — Phase 6：連線池、健康檢查、關機流程與部署測試
+
+**背景**
+- Render 與 Neon 免費方案已建立，並透過 GitHub 連動部署；migrations 已確認執行完成，進入部署後的 SQL 與資料操作測試階段。
+- 上線前要先釐清三件事：連線池的人數上限、本機與雲端 DB 的連線保護、重新部署時的關機流程。
+- 同時需要一個「只看資料庫」的健康檢查：Render 的免費方案會休眠、雲端 DB 會主動切斷閒置連線，服務存活不代表資料庫連線正常。
+
+**變更**
+- `src/db.ts`：`Pool` 加上 `max: 5`、`idleTimeoutMillis: 30_000`、`connectionTimeoutMillis: 15_000`、`statement_timeout: 5_000`；新增 `pool.on('error')`，閒置連線出錯時記下完整 error 物件
+- `src/index.ts`：新增 `GET /health/db`（執行 `SELECT 1`，回 `{ status, database: { connected: true }, durationMs }`）；`app.listen` 的回傳值存成 `server`，新增 `shutdown()` 處理 `SIGTERM` / `SIGINT`（關閒置 keep-alive 連線 → 停止接受新請求 → `pool.end()` → 結束；10 秒後強制 `process.exit(1)`）
+- `src/env.ts`：啟動時檢查 `DATABASE_URL`，缺少就直接丟錯結束
+- `package.json`：新增 `"engines": { "node": "24.x" }`，固定 Render 用的 Node 版本（與前端 workflow 的 `node-version: 24` 對齊）
+- 部署流程改為每次自動跑 migration：Build Command 用 `npm ci && npm run migrate && npm run build`（由 Render 於 build 階段執行；`npm run build` 只做 `tsc`，不會把 `src/migrations/*.sql` 複製到 `dist/`）。001 / 002 靠 `schema_migrations` 的執行記錄跳過、000 用 `IF NOT EXISTS`，重跑是安全的；Render build 失敗時該次部署會被取消、舊版本繼續運作，線上服務不受影響。
+- 使用 Neon SQL Editor 查詢 assets 資料，確認目前初始化資料；開始學習 SQL `UPDATE`、`RETURNING` 與 Transaction 的用途，規劃以 `BEGIN` 搭配 `ROLLBACK` 測試資料更新，避免測試修改被保存
+
+**設計決策**
+- `pool.on('error')` 必須存在：pg-pool 在閒置連線壞掉時會先移除該連線再發出 `error`，若無 listener 便會成為未捕捉例外，導致整個 process 結束；直接印出完整 error 物件，是為了保留 stack 與 pg 附帶的欄位（`severity`、`detail`、`[errors]`）
+- `/health/db` 不寫 try/catch：Express 5 會自動把 async handler 的 reject 交給 `errorHandler`，重複包裹一層會使同一邏輯需在兩處維護
+- 成功路徑不加 log：每次健康檢查都記錄一行會使 log 被健康檢查訊息淹沒，正常情況下不應有 log
+- `durationMs` 由 handler 自己算：`pool.query` 不會回傳耗時；將來變慢時可直接判斷是 DB 慢還是網路慢
+- `statement_timeout` 放在 pool 上而不是每支查詢各自設：一次套用到所有查詢，漏寫的地方也有保護
+- 關機用 `server.closeIdleConnections()` 先關閒置 keep-alive 連線：舊版 Node 的 `server.close()` 不會自動關閉它們，可能導致關機停滯；主動關閉便無需依賴特定版本的行為
+- `pool.end()` 加 `.catch()`：`pool.end()` 的 reject 若沒人接會變成 unhandled rejection，讓 process 異常結束；記 log 後照常 `process.exit(0)`
+- 10 秒保險用 `.unref()` 且觸發時印 log：計時器只是保險，不該成為程式活著的理由；真的觸發時可從 log 判斷為強制結束，而非由平台直接終止
+- 強制結束用 exit code 1、正常結束用 0：讓 Render 端從結束碼判斷這次是「正常關閉」還是「逾時強制結束」
+- 以 GitHub 中的 migration 檔案作為資料表結構的版本依據，不直接手動重建資料表；從今天起，每支新的 migration 必須是冪等的（`CREATE TABLE` 加 `IF NOT EXISTS`，`INSERT` 種子資料先檢查不存在才插），因為自動跑之後同一支會在每次部署都被執行一次
+- SQL 測試先用現有初始化 Asset，不新增測試資料、不改 Schema
+- 部署驗證依序從資料庫操作、後端 API 到前端整合，避免同時排查多個層次的問題
+
+**學習筆記**
+- 問：Node.js 的關機流程裡，強制結束用的計時器為什麼要寫成 `setTimeout(...).unref()`？不加會有什麼差別？
+  答：Node 的程式要「還有事情等著做」才會繼續活著，而計時器就是其中一種會讓它等下去的事情。`unref()` 的意思是「這個計時器不用算進『還有事要做』」——時間到了它照樣執行，但它自己不會成為程式不結束的理由。放在關機流程是因為這個 10 秒計時器只是保險：正常情況關機很快就完成，不該因為一個 10 秒的計時器尚未到期而延長程式的存活時間；加了 `unref()` 之後，一旦其他工作都做完、程式該結束時就不會被它拖住，僅在真正發生停滯時它才會被觸發執行 `process.exit(1)`。需要說明的是，以目前的寫法它主要是「語意上的保險」：成功路徑最後一定會呼叫 `process.exit(0)`，所以行為差別不大；它的價值在於把「這個計時器不該是程式活著的理由」寫進程式裡，日後若有人改動流程而遺漏 exit，也不會被它多佔用 10 秒。
+- 問：`package.json` 裡的 `"engines": { "node": "24.x" }` 有什麼作用？本機明明跑得起來，為什麼還要寫？
+  答：`engines` 是「這個專案預期在哪個 Node 版本上跑」的宣告，寫給兩個對象看：安裝工具（npm）和部署平臺（Render）。對 npm 來說，版本不符時預設只會印警告、不會擋下安裝，所以它主要是「告知」而不是「保護」；真正有作用的是部署平臺——Render 會讀這個欄位決定用哪個版本建置和執行，沒寫就用平臺自己的預設版本，而那可能是本機沒測過的版本。寫成 `24.x` 代表「24 系列的任何一個版本」，好處是自動吃到 24 的安全性修補；若要完全重現某個問題，才改用固定的完整版本。部署後應檢查 Render 的 log 開頭是否出現 `Using Node version v24.x.x`；若有，表示 Render 已採用指定的版本；若未出現並伴隨警告訊息，表示 Render 無法解析該版本而退回預設值，此時應改用完整版本號。（前端不是用 `engines`，而是 GitHub Actions 的 `node-version: 24`，兩邊指的都是 Node 24。）
+- 問： SQL Transaction（交易）是什麼？
+  答： 將多個 SQL 操作視為一個整體，確保相關資料操作的一致性。
+- 問： `BEGIN`、`COMMIT`、`ROLLBACK` 有什麼用途？
+  答：
+  - `BEGIN`：開始交易。
+  - `COMMIT`：提交交易，保存修改。
+  - `ROLLBACK`：取消尚未提交的修改。
+- 問： 什麼時候需要使用 Transaction？
+  答： 當多個資料庫操作必須一起成功時，例如銀行轉帳中的扣款與加款，可以使用交易避免只完成部分操作。單一 SQL 操作通常不需要特別建立交易。
+- 問： Transaction 的核心概念是什麼？
+  答： Atomicity（原子性），也就是一組相關操作要嘛全部成功，要嘛全部不生效。
+- 問： Transaction 是通用概念還是 PostgreSQL 專用？
+  答： Transaction 是常見的關聯式資料庫概念。不同資料庫都可能支援交易，但語法與行為細節有所差異。
+- 問： `RETURNING` 的用途是什麼？
+  答： PostgreSQL 可以在 `INSERT`、`UPDATE` 或 `DELETE` 後，直接回傳受影響資料的欄位，方便立即檢查操作結果。
+- 問： 為什麼測試 SQL 時可以使用 `BEGIN` + `ROLLBACK`？
+  答： 可以在交易中執行修改並觀察結果，再取消未提交的變更。但這不代表所有資料庫操作都能透過 `ROLLBACK` 復原。
+- 問：SQL 的 `COMMIT` 實際上有什麼用途？跟普通寫 SQL 差在哪，什麼時候要用？
+  答：`COMMIT` 即「確定送出」。在一個交易中進行的所有修改，在 `COMMIT` 之前都只是草稿：僅有發起該交易的連線可見，資料庫也尚未真正寫入；一旦 `COMMIT`，草稿才會成為正式紀錄，對所有連線可見，即使發生斷電也不會遺失；`ROLLBACK` 則是將該交易的所有修改全部放棄，視為未曾執行。跟普通寫 SQL 的差別在於：沒寫 `BEGIN` 的單句 SQL，PostgreSQL 會自動包一層隱形交易、跑完等於自動 `COMMIT`，所以單句根本不需要手動寫；只有在需要把多句 SQL 綁成一個整體時，才需要親自 `BEGIN`，最後親自 `COMMIT`。非要它不可的時機是好幾個操作必須一起成功時，例如轉帳的扣款與加款兩句 `UPDATE` 包在 `BEGIN` 裡，第二句失敗就 `ROLLBACK`，第一句的扣款也會一併取消，不會出現扣款成功、加款失敗的資金不一致狀態。跟本專案有關的例子是 `migrate.ts`：每一支 migration 都包在交易裡，連同登記到 `INSERT INTO schema_migrations` 一起 `COMMIT`，任何一步失敗就全部取消，資料庫永遠是要嘛跑完、要嘛沒跑的乾淨狀態，這正是即使將 migration 納入自動部署流程，也能保證重複執行安全的根本原因。
+- 問：目前階段、實務上推薦使用 Auto Deploy（自動部署）嗎？
+  答：建議啟用，但有 3 個條件。單人、原型階段、免費方案的最大成本是「手動步驟」，每減少一步手動操作就少一次出錯的機會，所以實務上這種組合都是開 Auto Deploy（推上 GitHub 就自動建置上線）。條件一：`main` 分支隨時可以上線，不應將尚未完成的程式推送上去，每個 commit 都是完整可跑的。條件二：migration 向後相容且冪等，不要寫破壞性的（刪欄位、改欄位型別）；損壞的 migration 會導致 build 失敗、部署停滯，但 Render 會讓舊版本繼續運作，線上服務不受影響，修復後重新推送即可。條件三：每次部署後進行約 30 秒的驗證——檢查 Render log 開頭（Node 版本、migration 是 Applied 還是 Skipping）、`GET /health/db` 有沒有 `durationMs`、前端改色存檔後重載還在不在。要關掉的時機是：有真實使用者、多人協作、要做破壞性 migration 需要手動選擇時機執行；到時的做法是開 `develop` 分支日常推、只把驗過的合進 `main`，現階段尚無此需求。
+
+**已知限制 / 後續**
+- `statement_timeout` 同樣套用到 `migrate.ts`（同一顆 pool）：超過 5 秒的 migration（例如大表的 `CREATE INDEX`）會被中斷，屆時要另外給 migrate 專用的 pool 或暫時調高
+- `/health/db` 失敗回 500（走既有 `errorHandler`），不是 503：健康檢查語意上 503 更準確，但這是沿用既有錯誤架構的取捨
+- Windows 上無法送出真正的 SIGTERM（會被直接終止），關機流程只能用 `process.emit('SIGTERM')` 模擬或以 Render 端觀察驗證
+- 部署後要在 Render log 開頭確認 `Using Node version v24.x.x`，證明 `engines` 生效
+
 ## 2026-10-07 — Phase 3：列表改回摘要，單筆維持完整
 
 **背景**
 - `GET /assets` 原本回完整 `Asset[]`（含整包 `config`），但列表的功能是「挑哪一筆」，不需要把整包場景設定撈出來。
-- 前端實際編輯的是某一筆資產（`GET /assets/:id` + `PUT /assets/:id`），列表摘要化後 `get` 名正言順——這是一次破壞性變更（breaking change：回應形狀改變），前端同步跟進。
+- 前端實際編輯的是某一筆資產（`GET /assets/:id` + `PUT /assets/:id`），列表摘要化後 `get` 即為完整內容的取得端點——這是一次破壞性變更（breaking change：回應形狀改變），前端同步跟進。
 
 **變更**
 - `services/assetService.ts`：新增 `AssetSummary = { id, name }`；`listAssets()` 改為只 `SELECT id, name`，回傳 `Promise<AssetSummary[]>`，直接回 `result.rows`（不經 `toAsset` 轉換）
@@ -14,15 +76,15 @@
 - `README.md`：`GET /assets` 回應改為 `AssetSummary[]`，補上列表資料形狀範例
 
 **設計決策**
-- 列表只回辨識欄位（`id`、`name`）：列表是「菜單」，完整 `config` 只在 `get` 拿；避免每筆都序列化傳輸整包 JSONB
+- 列表只回辨識欄位（`id`、`name`）：列表僅作為挑選用途，完整 `config` 只在 `get` 拿；避免每筆都序列化傳輸整包 JSONB
 - `AssetSummary` 不做 `updatedAt` 轉換：只有 `string` 欄位，無需 `toAsset` 那層 Date 轉 ISO
 - `getAsset` / `updateAsset` 的 `AssetRow` 與 `toAsset` 保留：它們仍需要處理 `Date` 轉 ISO
 
 **學習筆記**
 - 問：什麼是「破壞性變更（breaking change）」？這次把 `GET /assets` 的回應從完整 `Asset[]` 改成摘要 `{ id, name }[]`，為什麼算？
-  答：破壞性變更指的是「改了之後，原本照舊使用的人會壞掉」的改動。這次 `GET /assets` 回傳的資料形狀變了（每筆少了 `config`、`updatedAt` 等欄位），任何原本直接拿 `config` 來用的前端程式都會拿到 undefined 而壞掉——即使後端本身運作正常，對使用它的那一端仍是破壞性的。這種改動必須前後端一起改、一起上線，不能只改一邊，所以要特別標出來提醒。
+  答：破壞性變更指的是「改了之後，原本照舊使用的人會壞掉」的改動。這次 `GET /assets` 回傳的資料形狀變了（每筆少了 `config`、`updatedAt` 等欄位），任何原本直接拿 `config` 來用的前端程式都會拿到 undefined 而導致錯誤——即使後端本身運作正常，對使用它的那一端仍是破壞性的。這種改動必須前後端一起改、一起上線，不能只改一邊，故特別標示以提醒後續維護者。
 - 問：要「重新套用」現有的 migration（資料庫變更）時，為什麼是保留 `schema_migrations` 記錄表、只刪掉裡面的記錄再重跑，而不是把整個資料庫砍掉重練？
-  答：`migrate.ts` 是看 `schema_migrations`（記錄哪支 migration 跑過的表）決定每一支要「跳過」還是「重跑」：記錄還在就跳過，記錄被刪掉就重跑。所以只刪某幾支的記錄，就能只重跑那幾支、其餘照樣跳過，不用整庫歸零。但要注意「刪記錄只影響跑不跑，不會把已經造成的結果還原」：`001` 是 `CREATE TABLE assets`（沒有 `IF NOT EXISTS`），表還在的話重跑會直接報「資料表已存在」；`002` 是 `INSERT` 種子資料，重跑會再多插一筆。所以能重跑的前提是，先把要重建的表（`assets`）也砍掉、再刪掉對應記錄，讓那幾支從乾淨狀態重跑一次。（`000` 例外：它用 `CREATE TABLE IF NOT EXISTS` 且每次都會跑，不受記錄影響。）
+  答：`migrate.ts` 是看 `schema_migrations`（記錄哪支 migration 跑過的表）決定每一支要「跳過」還是「重跑」：記錄還在就跳過，記錄被刪掉就重跑。所以只需刪某幾支的記錄，即可只重跑那幾支、其餘照樣跳過，不用整庫歸零。但要注意「刪記錄只影響跑不跑，不會把已經造成的結果還原」：`001` 是 `CREATE TABLE assets`（沒有 `IF NOT EXISTS`），若表仍存在，重跑會直接回報「資料表已存在」錯誤；`002` 是 `INSERT` 種子資料，重跑會再多插一筆。所以能重跑的前提是，先把要重建的表（`assets`）也砍掉、再刪掉對應記錄，讓那幾支從乾淨狀態重跑一次。（`000` 例外：它用 `CREATE TABLE IF NOT EXISTS` 且每次都會跑，不受記錄表影響。）
 
 **已知限制 / 後續**
 - 目前產品只有一筆 `id` 為 `1` 的資產；多筆資產的選擇介面出現時，直接沿用 `GET /assets` 摘要
@@ -61,7 +123,7 @@
 
 **背景**
 - `assets` 主鍵是 `BIGINT`，而 `pg` 讀 BIGINT 一律回傳字串（JS 的 `number` 無法精準表示超過 2^53 的整數）。
-- `assetService.ts` 原本用 `Number(row.id)` 把字串轉成數字，等於默默假設 id 永遠不會超過安全範圍，且回傳型別要跟前端契約一起對齊。
+- `assetService.ts` 原本用 `Number(row.id)` 把字串轉成數字，等於隱含假設 id 永遠不會超過安全範圍，且回傳型別要跟前端契約一起對齊。
 - Phase 2 完成資料庫與 Asset Model 後，前端已有 `AssetRepository` 接縫，接著實作後端端點。
 
 **變更**
@@ -79,7 +141,7 @@
   - id 是識別碼、不是數量，不會拿來做數學運算，用字串語意正確
   - `BIGINT` 天生超出 JS `number` 的安全整數範圍（2^53−1），維持 number 等於埋下「以後偷偷失真」的定時炸彈
   - 網址與 JSON 本來就是字串導向，統一成字串反而少一次轉換
-  - 之後若改用 UUID（亂數字串），前端型別不用動
+  - 之後若改用 UUID（隨機字串），前端型別不用動
 - 這取代 2026-10-04「前端 id 改成數字」的決定
 - 分層：`routers` 只處理 HTTP（驗證、狀態碼），`services` 只處理 SQL 與資料形狀，`validators` 只做輸入驗證
 - `id` 格式用 `/^[1-9]\d*$/` 檢查（只收正整數字串），格式不對回 400、找不到回 404，兩者分開
@@ -87,14 +149,14 @@
 - 驗證只回傳 `{ name, config }`，前端多帶其他欄位不會被寫進資料庫
 - `config` 整包存進 JSONB，新增資產類型不用改資料表
 - CORS 用 `CORS_ORIGIN` 當允許清單，支援逗號分隔多個來源（本機 + 之後的 GitHub Pages），只有清單內的來源才拿得到 `Access-Control-Allow-Origin`；未設定時傳 `undefined`，cors 套件會回 `Access-Control-Allow-Origin: *`（不限來源），本機開發與前端未部署時不必設定，正式環境必須設成明確白名單
-- 清單逐筆 `trim()`：`"a, b"` 不 trim 會變成 `["a", " b"]`，而 `" b"` 與 `"b"` 是不同字串，比對失敗卻不會有任何錯誤訊息，是這種設定最難查的坑
+- 清單逐筆 `trim()`：`"a, b"` 未經 trim 會被解析為 `["a", " b"]`，而 `" b"` 與 `"b"` 是不同字串，比對失敗時不會產生任何錯誤訊息，是此類設定中最不易排查的問題
 
 **學習筆記**
 
 - 問：後端從資料庫查資料回來時，為什麼要宣告兩個型別（`Asset` 和 `AssetRow`），只宣告一個不行嗎？好處、成本與必要性各是什麼？
   答：這兩個型別描述的是不同層的東西，實際形狀本來就不一樣。`AssetRow` 是「資料庫列的真實長相」，也就是 `pg` 讀出來的值：`BIGINT` 是字串、`JSONB` 是已解析的物件、`TIMESTAMPTZ` 是 JS 的 `Date` 物件；`Asset` 是「API 回傳的長相」，是給前端看的形狀，其中 `updatedAt` 是 ISO 字串。兩者最明顯的差別就是 `updatedAt`：一邊是 `Date`、一邊是 `string`，所以不會是同一個型別。
 
-  只宣告一個會出的問題：如果硬把 `Asset`（`updatedAt: string`）套在 `pg` 回來的列上，等於型別在說謊——實際塞進去的是 `Date`，TypeScript 不會報錯；之後只要有人把 `updatedAt` 當字串用（例如取前 10 碼、字串比對），就會在執行時才爆，編譯期完全沒警告。另一個極端是完全不給型別（`pool.query()` 不帶泛型），這時 `row` 是 `any`（等於關掉所有欄位與型別的檢查），有型別等於沒型別。
+  只宣告一個會出的問題：如果硬把 `Asset`（`updatedAt: string`）套在 `pg` 回來的列上，等於型別與實際不符——實際塞進去的是 `Date`，TypeScript 不會報錯；日後若有人把 `updatedAt` 當字串用（例如取前 10 碼、字串比對），就會在執行時才爆，編譯期完全沒警告。另一個極端是完全不給型別（`pool.query()` 不帶泛型），這時 `row` 是 `any`（等於關掉所有欄位與型別的檢查），等同缺乏型別。
 
   必要性：至少在 `query` 給一個「資料庫列」型別，編譯器才能檢查欄位有沒有打錯；把 API 形狀另外宣告，則是為了讓「給前端的契約」保持乾淨（`updatedAt` 是字串），不被驅動層的 `Date` 汙染。分開也代表兩層能各自獨立演進：以後換 ORM、或多砍 API 欄位時，各自改各自的型別，不會互相牽動。
 
@@ -153,7 +215,7 @@
 
 **背景**
 - 檢查 `src/migrations/001_create_assets.sql`，發現 `id` 與時間欄位的型別跟前後端契約對不上，確定方向後已直接修改該檔。
-- 實作 `src/migrate.ts` 跑 migration 的流程，過程中連修三個 bug（見學習筆記）。
+- 實作 `src/migrate.ts` 跑 migration 的流程，過程中連續修復三個 bug（見學習筆記）。
 
 **migration 機制說明**
 
@@ -171,7 +233,7 @@
 **學習筆記**
 
 - 問：id的`BIGINT`跟`INTEGER`的取捨
-  答：方向對一半，後半的 `GENERATED ALWAYS AS IDENTITY` 保留，前半的 `INTEGER`（整數型別，最多存到約 21 億）要換成 `BIGINT`。實務上新專案預設都用 `BIGINT`，不是因為會有 21 億筆，而是多佔的空間很小，可以少掉一個以後爆掉要換型別的大麻煩
+  答：前半正確，後半的 `GENERATED ALWAYS AS IDENTITY` 保留，前半的 `INTEGER`（整數型別，最多存到約 21 億）要換成 `BIGINT`。實務上新專案預設都用 `BIGINT`，不是因為會有 21 億筆，而是多佔的空間很小，可避免日後因容量不足而需更換型別的大規模異動
 
 - 問：TIMESTAMP 跟 TIMESTAMPZ 的差別
   答：`TIMESTAMP`（不帶時區的時間，只存幾月幾號幾點，不記這是台灣時間還是 UTC 時間）以後資料庫搬家會被解讀成不同時刻。`TIMESTAMPTZ` 會統一轉成 UTC 存，顯示時再轉回連線時區，就沒這個問題。前端傳的本來就是結尾有 `Z` 的格式（`Z` 就是 UTC 的意思），跟 `TIMESTAMPTZ` 剛好對上
@@ -179,20 +241,20 @@
 - 問：`CURRENT_TIMESTAMP` 跟 `NOW()` 的差別
   答：`NOW()` 是 PostgreSQL 常用的寫法，`CURRENT_TIMESTAMP` 是 SQL 標準（跨資料庫通用的寫法）的寫法，在 PostgreSQL 裡兩者功能完全一樣。
 
-- 問：為什麼剛剛怎麼輸入指令都會報錯，PostgreSQL 中的 =# 跟 -#有什麼差別
-  答：這兩個是 `psql`（PostgreSQL 內附的指令列工具，用來直接下 SQL）的提示符號，看它就知道上一句有沒有打完。`=#` 是空閒（上一句已結束，可以下新指令）；`-#` 是接續（上一句少了分號，`psql` 還在等你把話講完）。卡在 `-#` 時新打的指令會被黏在上一句後面一起解讀，所以怎麼打都報錯。解法只有兩種：把話講完（補 `;` 後按 Enter 送出），或整句不要了（按 `Ctrl + C` 取消，回到 `=#` 再重打）
+- 問：為什麼無論輸入什麼指令都會報錯，PostgreSQL 中的 =# 跟 -#有什麼差別
+  答：這兩個是 `psql`（PostgreSQL 內附的指令列工具，用來直接下 SQL）的提示符號，看它就知道上一句有沒有打完。`=#` 是空閒（上一句已結束，可以下新指令）；`-#` 是接續（上一句少了分號，`psql` 還在等你把話講完）。卡在 `-#` 時新打的指令會被黏在上一句後面一起解讀，所以怎麼打都報錯。處理方式有兩種：把話講完（補 `;` 後按 Enter 送出），或整句不要了（按 `Ctrl + C` 取消，回到 `=#` 再重打）
 
 - 問：為什麼用 result.rows.length 而不用原本 result.rowCount
-  答：`rows`（查回來的資料陣列，`SELECT` 一定會有）跟 `rowCount`（資料庫回報受影響幾筆，`SELECT` 以外才保證有值）在 `SELECT` 是不一樣的東西。`pg` 的型別寫的是 `rowCount: number | null`（`|` 是或的意思：這個值可能是數字，也可能是空的），代表它允許是空的，`SELECT` 在某些情況會拿到空的，要多寫判斷。`migrate.ts` 只是要問「這筆 migration 跑過了沒」，`rows.length > 0` 直接數拿回幾筆，語意最直白，也不用處理空值的情況
+  答：`rows`（查回來的資料陣列，`SELECT` 一定會有）跟 `rowCount`（資料庫回報受影響幾筆，`SELECT` 以外才保證有值）在 `SELECT` 是不一樣的東西。`pg` 的型別寫的是 `rowCount: number | null`（`|` 是或的意思：這個值可能是數字，也可能是空的），代表它允許是空的，`SELECT` 在某些情況會拿到空的，要多寫判斷。`migrate.ts` 只是要問「這筆 migration 跑過了沒」，`rows.length > 0` 直接計算取回的筆數，語意最為直觀，也不用處理空值的情況
 
 - 問：schema_migrations 記錄表該由 000 這個 migration 建，還是直接寫死在 migrate.ts 裡？
-  答：由 `000` 建才是對的。`migrate.ts`（跑 migration 的程式）只負責讀 `.sql` 檔、照檔名順序跑、記下誰跑過了，不該知道某張表的長相。建表語句放在 `000` 裡，資料庫長什麼樣子全部由 `.sql` 檔說了算，程式不用改。反例：如果在 `migrate.ts` 裡寫死 `CREATE TABLE`，以後記錄表要加欄位，就要同時改程式跟 SQL，兩邊很容易對不上
+  答：由 `000` 建才是對的。`migrate.ts`（跑 migration 的程式）只負責讀 `.sql` 檔、照檔名順序跑、記下誰跑過了，不該知道某張表的長相。建表語句放在 `000` 裡，資料庫長什麼樣子全部由 `.sql` 檔說了算，程式不用改。反之，若在 `migrate.ts` 裡寫死 `CREATE TABLE`，以後記錄表要加欄位，就要同時改程式跟 SQL，兩邊很容易對不上
 
 - 問：為什麼 migration 的交易不能直接用 pool 連續下 BEGIN / COMMIT？
   答：`pool`（預先管好的一組資料庫連線，每次查詢會從裡面隨便拿一條來用）連續下四次，可能拿到四條不同的連線，開交易跟跑 SQL 不在同一條，存檔跟丟掉的指令就管不到真正跑的那條。正確做法是先用 `pool.connect()`（跟 pool 借一條專線）借一條出來，整組 `BEGIN` / SQL / `COMMIT`（交易成功就存檔）或 `ROLLBACK`（交易失敗就整組丟掉）都在同一條上跑完，最後用 `finally`（不管成功失敗都會跑的段落）把線還回去
 
 - 問：為什麼 migration 一開始完全沒有寫入記錄，後來又報表不存在，最後還撞主鍵？
-  答：這是連續三個 bug。第一個是 `migrate.ts` 的 `INSERT ... VALUES ($1)` 少傳了 `[fileName]`，`$1`（第一個參數放這裡的意思）沒給值，所以記錄從來沒寫成功過；第二個是 `000` 建的表名（`migrations`）跟程式查的表名（`schema_migrations`）對不上，查記錄時直接報表不存在；前兩個修好後才露出第三個——`000` 建完表還硬要把自己寫進記錄表，下次跑又寫一次同一個檔名，檔名是主鍵（不可重複的身分證）就撞了。中間加過 `ON CONFLICT DO NOTHING`（撞到就跳過、不報錯），但那只是把報錯壓住。終點是讓 `000` 不查也不寫記錄：它的工作只有建表，`CREATE TABLE IF NOT EXISTS`（表已存在就跳過、不報錯）本來就保證重跑不會炸，不需要靠記錄表擋重複（中間 `fileName` 改 `file_name` 只是順手對齊 SQL 慣例）。代價是 `000` 每次都會真的跑一次、顯示 `Applied`啟動檔特殊處理，換來其他檔案的流程乾淨
+  答：這是連續三個 bug。第一個是 `migrate.ts` 的 `INSERT ... VALUES ($1)` 少傳了 `[fileName]`，`$1`（第一個參數放這裡的意思）沒給值，所以記錄從來沒寫成功過；第二個是 `000` 建的表名（`migrations`）跟程式查的表名（`schema_migrations`）對不上，查記錄時直接報表不存在；前兩者修復後，第三個問題才浮現——`000` 建完表還硬要把自己寫進記錄表，下次跑又寫一次同一個檔名，檔名是主鍵（不可重複的身分證）就撞了。中間加過 `ON CONFLICT DO NOTHING`（撞到就跳過、不報錯），但那僅是將錯誤訊息掩蓋。最終做法是讓 `000` 不查也不寫記錄：它的工作只有建表，`CREATE TABLE IF NOT EXISTS`（表已存在就跳過、不報錯）本來就保證重跑不會炸，不需要靠記錄表擋重複（中間 `fileName` 改 `file_name` 只是順手對齊 SQL 慣例）。代價是 `000` 每次都會真的跑一次、顯示 `Applied`；作為交換，其他檔案的流程得以保持簡潔
 
 **已知限制 / 後續**
 - 前端 `id` 已改成數字，對齊後端 `BIGINT`
@@ -214,7 +276,7 @@
 **學習筆記**
 
 - 問：什麼是建索引？聽說後端改善效能通常會加這個，為什麼不一開始就建？
-  答：索引（Index）是資料庫的目錄：沒建的話，查一筆資料要整張表從頭翻到尾；建了之後可以直接翻目錄定位，幾百萬筆時差很多。但它有代價：每次寫入或更新都要順手更新目錄，所以寫入會變慢一點，也會多佔空間；而且加錯地方（例如在幾乎不查的欄位上建）等於白付代價還拖慢寫入。所以實務上是先不建，等真的慢了、用慢查詢紀錄找到瓶頸在哪一欄，再針對那一欄建。
+  答：索引（Index）可視為資料庫的目錄：沒建的話，查一筆資料要整張表從頭翻到尾；建了之後可以直接翻目錄定位，幾百萬筆時差很多。但它有代價：每次寫入或更新都要順手更新目錄，所以寫入會變慢一點，也會多佔空間；而且加錯地方（例如在幾乎不查的欄位上建）等於白付代價還拖慢寫入。所以實務上是先不建，等真的慢了、用慢查詢紀錄找到瓶頸在哪一欄，再針對那一欄建。
 
 - 問：慢查詢（Slow query）是什麼？跟普通查詢有什麼差別？
   答：慢查詢不是一種特別的語法，就是普通的 SQL，只是跑得太慢、超過資料庫設定的時間（例如超過 1 秒）被記下來。資料庫會自動把這些超時的查詢寫進一份慢查詢紀錄，後端要優化效能時就先看這份紀錄：最常出現、跑最久的那幾條，就是要修的目標，加索引通常就是加在這些查詢用到的欄位上。普通查詢跟慢查詢的差別只在「有沒有超時被記下來」，寫法上完全一樣
