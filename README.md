@@ -59,6 +59,8 @@ npm run dev       # http://localhost:3000
 - [x] `PUT /assets/:id`
 - [x] Request validation
 - [x] API error handling（4xx / 500 的統一 JSON 回應）
+- [ ] `GET /models/*`：靜態模型檔（`express.static` 提供，長快取；模型由後端提供，前端不寫死檔案位置）
+- [ ] `model_key` 欄位與 demo 資產 seed（migration `003` / `004`；DB 存 key 不存絕對 URL）
 
 > 目前產品只有一筆 `id` 為 `1` 的資產（前端一次只編輯一筆）。
 > 這個後端是給 3D Viewer 用的：資產由種子資料（或之後的後台）提供，App 本身不新增、也不刪除資產，
@@ -72,19 +74,14 @@ npm run dev       # http://localhost:3000
 - [x] Load Asset
 - [x] Save (Update) Asset
 - [x] Loading / Error handling
+- [x] 逾時 / GET 重試 / 錯誤提示（前端 `src/api/client.ts`、`useAssetConfig.ts`）
 
-### Phase 5 — API Documentation
-
-- [ ] 用註解產生 API 文件（例如 swagger-jsdoc + swagger-ui-express）
-- [ ] 文件頁面掛在 `/docs` 可瀏覽
-- [ ] Review API contract
-
-### Phase 6 — Deployment
+### Phase 5 — Deployment
 
 - [x] 後端部署到託管平台
 - [x] 資料庫改用雲端 PostgreSQL
 - [x] 設定正式環境變數（`PORT`、`DATABASE_URL`、`CORS_ORIGIN`）
-- [ ] 處理雲端 DB 休眠喚醒（Neon 閒置暫停後首次連線延遲與逾時）
+- [ ] 冷啟動實測與前端提示對齊（Neon 喚醒期間由前端顯示啟動提示 + GET 自動重試；實測後補上量測結果，取代「處理喚醒」這種像待開發功能的寫法）
 
 部署筆記（Render）：
 - Build Command 用 `npm ci && npm run migrate && npm run build`，Start Command 用 `npm run start`。build 階段會先自動跑 migration 再編譯；`npm run build` 只做 `tsc`，不會把 `src/migrations/*.sql` 複製到 `dist/`。若 Render build 失敗（例如某支 migration 有誤），該次部署會被取消、舊版本繼續運作，線上服務不受影響。
@@ -134,6 +131,8 @@ npm run dev       # http://localhost:3000
 - 500 — `INTERNAL_SERVER_ERROR`
 
 驗證規則見 `src/validators/assetValidator.ts`。
+
+目前不提供 OpenAPI 規格或 `/docs` 頁面；API 契約以上面的端點表格與錯誤碼為準。
 
 ## Asset
 
