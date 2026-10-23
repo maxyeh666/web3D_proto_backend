@@ -10,9 +10,21 @@ export const errorDefinition: Record<ErrorCode, ErrorDefinition> = {
         statusCode: 400,
         message: "Invalid JSON body"
     },
+    [ErrorCode.UNAUTHORIZED]: {
+        statusCode: 401,
+        message: "Authorization required"
+    },
+    [ErrorCode.INVALID_CREDENTIALS]: {
+        statusCode: 401,
+        message: "Invalid credentials"
+    },
     [ErrorCode.INVALID_ASSET_ID]: {
         statusCode: 400,
         message: "Invalid asset ID"
+    },
+    [ErrorCode.FORBIDDEN]: {
+        statusCode: 403,
+        message: "Forbidden"
     },
     [ErrorCode.ASSET_NOT_FOUND]: {
         statusCode: 404,

@@ -29,7 +29,7 @@ npm run dev       # http://localhost:3000
 
 其他指令：`npm run typecheck` / `npm run build` / `npm start`
 
-環境變數：`PORT`（預設 3000）、`CORS_ORIGIN`（前端來源，多個以逗號分隔）、`DATABASE_URL`
+環境變數：`PORT`（預設 3000）、`CORS_ORIGIN`（前端來源，多個以逗號分隔）、`DATABASE_URL`、`ADMIN_PASSWORD`（管理者登入密碼）、`JWT_SECRET`（簽發 JWT 的密鑰）
 
 ## Progress Log
 
@@ -56,11 +56,13 @@ npm run dev       # http://localhost:3000
 
 - [x] `GET /assets`
 - [x] `GET /assets/:id`
-- [x] `PUT /assets/:id`
+- [x] `PUT /assets/:id`（需管理者 token）
 - [x] Request validation
 - [x] API error handling（4xx / 500 的統一 JSON 回應）
+- [x] `POST /auth/login`：管理者登入，驗密碼後簽發 15 分鐘有效的 JWT（`routers/auth.ts` / `services/authService.ts` / `validators/authValidator.ts`，需 `ADMIN_PASSWORD` 與 `JWT_SECRET`）
+- [x] `PUT /assets/:id` 需管理者權限（`middlewares/requireAdmin.ts`：驗 `Authorization: Bearer <token>` 與 `role === "admin"`）
 - [ ] `GET /models/*`：靜態模型檔（`express.static` 提供，長快取；模型由後端提供，前端不寫死檔案位置）
-- [ ] `model_key` 欄位與 demo 資產 seed（migration `003` / `004`；DB 存 key 不存絕對 URL）
+- [x] `model_key` 欄位與 demo 資產 seed（migration `003` / `004`；DB 存 key 不存絕對 URL）
 
 > 目前產品只有一筆 `id` 為 `1` 的資產（前端一次只編輯一筆）。
 > 這個後端是給 3D Viewer 用的：資產由種子資料（或之後的後台）提供，App 本身不新增、也不刪除資產，
@@ -80,14 +82,14 @@ npm run dev       # http://localhost:3000
 
 - [x] 後端部署到託管平台
 - [x] 資料庫改用雲端 PostgreSQL
-- [x] 設定正式環境變數（`PORT`、`DATABASE_URL`、`CORS_ORIGIN`）
+- [x] 設定正式環境變數（`PORT`、`DATABASE_URL`、`CORS_ORIGIN`、`ADMIN_PASSWORD`、`JWT_SECRET`）
 - [ ] 冷啟動實測與前端提示對齊（Neon 喚醒期間由前端顯示啟動提示 + GET 自動重試；實測後補上量測結果，取代「處理喚醒」這種像待開發功能的寫法）
 
 部署筆記（Render）：
 - Build Command 用 `npm ci && npm run migrate && npm run build`，Start Command 用 `npm run start`。build 階段會先自動跑 migration 再編譯；`npm run build` 只做 `tsc`，不會把 `src/migrations/*.sql` 複製到 `dist/`。若 Render build 失敗（例如某支 migration 有誤），該次部署會被取消、舊版本繼續運作，線上服務不受影響。
 - `/health/db` 成功回 200（含 `durationMs`），資料庫連不上時回 500。
 - 連線池的 `statement_timeout: 5000` 同時套用到 `migrate.ts`（同一顆 pool），超過 5 秒的 migration 會被中斷。
-- 部署後驗證：`/health/db` 有 `durationMs`、`/assets` 的 CORS 標頭正確、`/assets/999` 回 404、前端改色後 Save 並重載仍保留、Render log 開頭有 `Using Node version v24.x.x`。
+- 部署後驗證：`/health/db` 有 `durationMs`、`/assets` 的 CORS 標頭正確、`/assets/999` 回 404、前端改色後 Save 並重載仍保留（需管理者 token，見 PUT 說明）、Render log 開頭有 `Using Node version v24.x.x`。
 
 ## Tech Stack
 
@@ -110,7 +112,8 @@ npm run dev       # http://localhost:3000
 | GET | `/health/db` | 資料庫連線狀態 | 200 `{ status, database: { connected }, durationMs }`，DB 不可用時 500 |
 | GET | `/assets` | 取得全部資產（摘要，只含辨識欄位） | 200 `AssetSummary[]` |
 | GET | `/assets/:id` | 取得單一資產 | 200 `Asset` |
-| PUT | `/assets/:id` | 更新單一資產 | 200 `Asset` |
+| POST | `/auth/login` | 管理者登入，驗密碼後簽發 token | 200 `{ token }`，密碼錯誤時 401 |
+| PUT | `/assets/:id` | 更新單一資產（需管理者 token：`Authorization: Bearer <token>`） | 200 `Asset`，未帶 token 時 401、非管理者時 403 |
 
 `PUT /assets/:id` 的請求內容（`id`、`updatedAt` 由資料庫維護，不接受前端指定）：
 
@@ -127,6 +130,8 @@ npm run dev       # http://localhost:3000
 錯誤回應統一為 `{ "error": { "code", "message" } }`：
 
 - 400 — `INVALID_ASSET_ID` / `INVALID_REQUEST_BODY`
+- 401 — `INVALID_CREDENTIALS`（登入密碼錯誤）/ `UNAUTHORIZED`（未帶 token 或 token 無效）
+- 403 — `FORBIDDEN`（token 有效但不是管理者）
 - 404 — `ASSET_NOT_FOUND` / `ROUTE_NOT_FOUND`
 - 500 — `INTERNAL_SERVER_ERROR`
 
@@ -143,7 +148,8 @@ Asset
 ├── id
 ├── name
 ├── config      ← 整包場景設定（物件）
-└── updatedAt
+├── updatedAt
+└── modelKey    ← 對應模型檔案的 key（DB 存 key 不存絕對 URL）
 ```
 
 `config` 的內容會隨資產類型變化，整包存成一欄（`config` 欄位型別為 JSONB），不拆成個別欄位。
@@ -154,7 +160,8 @@ assets 資料表
 ├── name        (文字)
 ├── config      (JSONB)
 ├── created_at  (TIMESTAMPTZ)
-└── updated_at  (TIMESTAMPTZ)
+├── updated_at  (TIMESTAMPTZ)
+└── model_key   (文字 / 非空，migration 003 加欄位、004 回填既有資料)
 ```
 
 **API 資料形狀**
@@ -167,7 +174,8 @@ assets 資料表
     "camera": { "position": [3, 5, 5], "fov": 60 },
     "cube": { "color": "#999999" }
   },
-  "updatedAt": "2026-10-03T00:00:00.000Z"
+  "updatedAt": "2026-10-03T00:00:00.000Z",
+  "modelKey": "default-cube"
 }
 ```
 
@@ -188,23 +196,32 @@ src/
 ├── env.ts                ← 讀取 .env
 ├── migrate.ts            ← 跑 migration 的程式
 ├── errorHandler.ts       ← 統一轉成 JSON 回應
+├── constants/
+│   └── jwt.ts            ← JWT 演算法與 token 有效期
 ├── errors/               ← ErrorCode + 錯誤查表 + AppError
 │   ├── errorCode.ts      ← 錯誤代碼
 │   ├── errorDefinition.ts ← 狀態碼與訊息查表
 │   └── error.ts          ← AppError
+├── middlewares/
+│   └── requireAdmin.ts   ← 驗管理者 token（Bearer）與 role
 ├── routers/
-│   └── assets.ts         ← /assets 路由：HTTP 進出與狀態碼
+│   ├── assets.ts         ← /assets 路由：HTTP 進出與狀態碼
+│   └── auth.ts           ← /auth 路由：登入發 token
 ├── services/
-│   └── assetService.ts   ← Asset 的 SQL 與資料形狀轉換
+│   ├── assetService.ts   ← Asset 的 SQL 與資料形狀轉換
+│   └── authService.ts    ← 驗密碼並簽發 JWT
 ├── validators/
-│   └── assetValidator.ts ← 請求參數驗證
-└── migrations/           ← 資料庫變更紀錄（000_…、001_…、002_…）
+│   ├── assetValidator.ts ← 請求參數驗證
+│   └── authValidator.ts  ← 登入請求驗證
+└── migrations/           ← 資料庫變更紀錄（000_…、001_…、…）
     ├── 000_create_schema_migrations.sql   ← 記錄表自己
     ├── 001_create_assets.sql              ← assets 表
-    └── 002_seed_default_asset.sql         ← 第一筆預設資產
+    ├── 002_seed_default_asset.sql         ← 第一筆預設資產
+    ├── 003_add_model_key.sql              ← 加 model_key 欄位
+    └── 004_back_fill_model_key.sql        ← 回填既有資料並設為非空
 ```
 
-分層：`routers` 只處理 HTTP（驗證、狀態碼），`services` 只處理 SQL 與資料形狀，`validators` 只做輸入驗證，`errors` 只定義錯誤與查表，`errorHandler` 只轉 JSON。
+分層：`routers` 只處理 HTTP（驗證、狀態碼），`services` 只處理業務邏輯（`assetService` 是 SQL 與資料形狀、`authService` 是驗密碼並簽發 token），`validators` 只做輸入驗證，`middlewares` 只做跨路由的檢查，`errors` 只定義錯誤與查表，`errorHandler` 只轉 JSON。
 
 ## Related Project
 

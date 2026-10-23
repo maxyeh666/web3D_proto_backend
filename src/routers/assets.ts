@@ -1,8 +1,9 @@
-﻿import { Router } from "express";
+﻿import { Router, type Request } from "express";
 import { listAssets, getAsset, updateAsset } from "../services/assetService.js";
 import { validateAssetId, validateUpdateAssetInput } from "../validators/assetValidator.js";
 import { AppError } from "../errors/error.js";
 import { ErrorCode } from "../errors/errorCode.js";
+import { requireAdmin } from "../middlewares/requireAdmin.js";
 
 const router = Router();
 
@@ -22,7 +23,7 @@ router.get("/:id", async (req, res) => {
     res.json(asset);
 });
 
-router.put("/:id", async (req, res) => {
+router.put<{ id: string }>("/:id", requireAdmin, async (req, res) => {
     const id = validateAssetId(req.params.id);
 
     if (!id) throw new AppError(ErrorCode.INVALID_ASSET_ID)
@@ -34,6 +35,6 @@ router.put("/:id", async (req, res) => {
     const asset = await updateAsset(id, input);
 
     res.json(asset);
-})
+});
 
 export default router;

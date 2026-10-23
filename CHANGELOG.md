@@ -2,6 +2,37 @@
 
 開發日誌：依日期記錄後端各階段的變更與設計決策。每則包含背景（為何做）、變更（做了什麼）、設計決策（為何這樣做）、學習筆記、已知限制 / 後續。
 
+## 2026-10-23 — 管理者登入、寫入保護與 model_key
+
+**背景**
+- `PUT /assets/:id` 要加上 `requireAdmin`（驗證管理者身分的中介層），只有帶管理者 token（令牌：登入後拿到的通行證）才能改資料。
+- 加上之後 `npm run typecheck` 報 `ts(2345)`：`req.params.id` 變成 `string | string[]`，傳不進只收 `string` 的 `validateAssetId`。
+- Viewer 之後會開放更新資產，但不能讓任何人改：需要一個管理者登入，寫入時驗身份。只做登入與守衛，不做帳號管理（使用者只有管理者一位）。
+- 同時把 `model_key` 落地：DB 之後要存「對應哪個模型」的 key，Phase 3 的種子資料與 API 先對齊。
+
+**變更**
+- 登入：`src/routers/auth.ts` 新增 `POST /auth/login`；`src/services/authService.ts` 以 `timingSafeEqual` 比對 `ADMIN_PASSWORD`，簽發 15 分鐘有效的 JWT（`src/constants/jwt.ts`，`HS256`）；`src/validators/authValidator.ts` 驗請求內容；掛載為 `app.use('/auth', authRouter)`。錯誤碼新增 `INVALID_CREDENTIALS`（401）
+- 寫入保護：`src/middlewares/requireAdmin.ts`（驗 `Authorization: Bearer <token>` 並限 `role === "admin"`）；`PUT /:id` 改為 `router.put<{ id: string }>("/:id", requireAdmin, async (req, res) => ...)`，在 `put` 上手動指定參數形狀；`requireAdmin` 本體不動。錯誤碼新增 `UNAUTHORIZED`（401）/ `FORBIDDEN`（403）
+- `model_key`：migration `003_add_model_key`（`IF NOT EXISTS`）加欄位、`004_back_fill_model_key` 回填既有資料為 `default-cube` 並設為非空；`src/services/assetService.ts` 的 `Asset` / `AssetRow` 新增 `modelKey`（SELECT 與 RETURNING 以 `model_key AS "modelKey"` 帶出）
+- 依賴：`package.json` 新增 `jsonwebtoken` + `@types/jsonwebtoken`
+
+**設計決策**
+- `requireAdmin` 維持 `RequestHandler` 預設的最寬型別：它是共用的檢查站，之後要能掛在沒有 `id`、或參數叫別的名字的路由上；為了一條 `/:id` 把它改窄，會跟其他路由對不上。
+- 精準型別標在 `put` 上：型別檔的註解寫明這個泛型（角括號 `<...>`：呼叫時順手指定的型別）就是設計來手動指定的，寫成 `router.put<{ id: string }>` 讓整條路由共用同一個參數形狀；目前只有這條路由用 `id`，且 `requireAdmin` 用預設最寬型別仍能通過檢查。若日後 `requireAdmin` 要掛到參數形狀不同的路由，再改為只在需要的 `req` 上標（例如 `req: Request<{ id: string }>`），讓窄的只留在那一條。
+- 密碼比對用 `timingSafeEqual` 並先比長度：避免回應時間洩漏密碼對錯的線索，長度不同時直接拒絕、不呼叫比對函式（`timingSafeEqual` 本身要求兩邊等長，否則會丟錯）
+- token 只放 `role`、15 分鐘有效：原型階段不需要記住誰登入，只要分辨「是不是管理者」；短期有效降低 token 外流後的影響；不做 refresh（重新整理機制），明天前端登入流程會處理過期（打 API 回 401 就請使用者重新登入）
+
+**學習筆記**
+- 問：在 Express（處理 HTTP 請求的後端框架）裡，為什麼 `PUT /:id` 只有一個處理函式時 `req.params.id` 是 `string`，多加一個驗證管理者身分的中介層之後就變成 `string | string[]`？為什麼不直接改中介層的型別？
+
+  答：這是型別推斷（TypeScript 自動幫你猜型別的機制）在搞鬼。`router.put` 看到路徑是 `/:id` 時，本來能精準猜出參數是 `{ id: string }`；但加上 `requireAdmin` 之後，兩個處理函式要共用同一個參數型別，而 `requireAdmin` 用的是預設最寬的那種（`ParamsDictionary`，意思是「任何參數名都可能是字串或字串陣列」），兩個對不起來，TypeScript 就退回最寬的，`id` 於是變成 `string | string[]`，跟只收字串的 `validateAssetId(value: string)` 對不上就報錯。
+
+  中介層（請求進來前先經過的檢查站）要保持最寬，才能掛到任何路由上；解法是在路由上把形狀講明白，寫成 `router.put<{ id: string }>("/:id", ...)`。另一種等價寫法是只在最後那個處理函式上標（例如 `req: Request<{ id: string }>`），效果一樣；目前選前者是因為型別檔註明那個泛型就是設計來手動指定的，且整條路由只有一種參數形狀，之後若 `requireAdmin` 要掛到參數不同的路由，再換成後者讓窄的只留在需要的 handler。
+
+**已知限制 / 後續**
+- 前端尚未帶 `Authorization`：`PUT` 已上鎖，前端登入流程明天處理；屆時 Save 需帶 `Authorization: Bearer <token>`，401 時提示重新登入
+- 登入是管理者單一密碼，沒有帳號管理；要多使用者時需另設計 users 表與密碼雜湊
+
 ## 2026-10-22 — 近期終點收斂與後端 CI
 
 **背景**

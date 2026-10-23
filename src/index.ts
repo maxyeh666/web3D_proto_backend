@@ -4,6 +4,7 @@ import cors from 'cors';
 // 這裡採用js副檔名是因為在NodeNext模式下，ts檔案會被編譯成js檔案，並且使用ESM模組系統，所以要使用.js副檔名來引入模組
 import { pool } from './db.js';
 import assetsRouter from './routers/assets.js';
+import authRouter from './routers/auth.js';
 import { errorHandler } from "./errorHandler.js";
 import { AppError } from "./errors/error.js";
 import { ErrorCode } from "./errors/errorCode.js";
@@ -23,6 +24,8 @@ app.use(cors({
 app.use(express.json());
 // 將assetsRouter掛載到/assets路徑下，這樣所有以/assets開頭的請求都會交給assetsRouter處理
 app.use('/assets', assetsRouter);
+// 將authRouter掛載到/auth路徑下，這樣所有以/auth開頭的請求都會交給authRouter處理
+app.use('/auth', authRouter);
 // server健康度測試
 app.get('/health', (req, res) => {
     res.json({ status: 'ok' });

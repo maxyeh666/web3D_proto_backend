@@ -9,13 +9,14 @@ export type Asset = {
     name: string;
     config: unknown;
     updatedAt: string;
-}
+    modelKey: string;
+};
 
 // AssetSummary: 列表用形狀（只回辨識欄位，不含 config）
 export type AssetSummary = {
     id: string;
     name: string;
-}
+};
 // AssetRow: 資料庫列的實際形狀（pg 回傳的型別）
 // - BIGINT      → string（pg 的安全設計，避免超出 JS number 範圍）
 // - JSONB       → 已解析成 JS 物件
@@ -25,7 +26,8 @@ type AssetRow = {
     name: string;
     config: unknown;
     updatedAt: Date;
-}
+    modelKey: string;
+};
 
 // listAssets: 取得全部資產（摘要，只回辨識欄位）
 export async function listAssets(): Promise<AssetSummary[]> {
@@ -35,7 +37,7 @@ export async function listAssets(): Promise<AssetSummary[]> {
         FROM assets
         ORDER BY id ASC`);
     return result.rows;
-}
+};
 // getAsset: 取得單一資產
 export async function getAsset(id: string): Promise<Asset> {
     // 使用參數化查詢，避免 SQL Injection
@@ -43,7 +45,8 @@ export async function getAsset(id: string): Promise<Asset> {
         id, 
         name, 
         config, 
-        updated_at AS "updatedAt"
+        updated_at AS "updatedAt",
+        model_key AS "modelKey"
         FROM assets 
         WHERE id = $1`, [id]);
     // 取得第一列資料（如果有的話）
@@ -52,7 +55,7 @@ export async function getAsset(id: string): Promise<Asset> {
     if (!row) throw new AppError(ErrorCode.ASSET_NOT_FOUND)
 
     return toAsset(row);
-}
+};
 // updateAsset: 更新單一資產
 export async function updateAsset(id: string, input: UpdateAssetInput): Promise<Asset> {
     // RETURNING 是 PostgreSQL 的一個特性，可以在 UPDATE 語句中回傳更新後的資料列
@@ -62,14 +65,20 @@ export async function updateAsset(id: string, input: UpdateAssetInput): Promise<
         config = $2,
         updated_at = CURRENT_TIMESTAMP
         WHERE id = $3
-        RETURNING id, name, config, updated_at AS "updatedAt"`, [input.name, input.config, id]);
+        RETURNING 
+            id, 
+            name,
+            config,
+            updated_at AS "updatedAt",
+            model_key AS "modelKey"`
+        , [input.name, input.config, id]);
 
     const row = result.rows[0];
 
     if (!row) throw new AppError(ErrorCode.ASSET_NOT_FOUND)
 
     return toAsset(row);
-}
+};
 // toAsset: 把資料庫列轉成 API 回傳形狀（Date 轉 ISO 字串）
 function toAsset(row: AssetRow): Asset {
     return {
@@ -77,5 +86,6 @@ function toAsset(row: AssetRow): Asset {
         name: row.name,
         config: row.config,
         updatedAt: row.updatedAt.toISOString(),
+        modelKey: row.modelKey
     };
-}
+};
