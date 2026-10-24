@@ -27,7 +27,7 @@ app.use((req, res, next) => {
     const start = Date.now();
 
     res.on('finish', () => {
-        console.log(`[API] ${req.method} ${req.originalUrl} ${req.statusCode} ${Date.now() - start}ms`)
+        console.log(`[API] ${req.method} ${req.originalUrl} ${res.statusCode} ${Date.now() - start}ms`)
     })
 
     next();
