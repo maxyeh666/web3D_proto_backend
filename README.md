@@ -44,6 +44,7 @@ npm run dev       # http://localhost:3000
 - [x] Project structure（`src/index.ts` / `db.ts` / `env.ts` / `migrate.ts`）
 - [x] Environment configuration（`.env` + `.env.example`）
 - [x] Basic error handling（錯誤處理中介層）
+- [x] API 存取紀錄（`src/index.ts`，輸出 `[API] <method> <path> <status> <duration>ms`）
 
 ### Phase 2 — Database
 

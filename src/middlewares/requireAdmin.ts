@@ -20,7 +20,7 @@ export const requireAdmin: RequestHandler = (req, _res, next) => {
     try {
         payload = jwt.verify(token, jwtSecret, { algorithms: [JWT_ALGORITHM] })
     } catch (error) {
-        console.error(`[auth] Auth error: ${error}`)
+        console.error("[auth] Auth error", error)
         throw new AppError(ErrorCode.UNAUTHORIZED)
     }
 

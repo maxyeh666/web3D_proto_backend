@@ -22,6 +22,16 @@ app.use(cors({
 }));
 // 讓express解析request body為JSON格式
 app.use(express.json());
+// API log
+app.use((req, res, next) => {
+    const start = Date.now();
+
+    res.on('finish', () => {
+        console.log(`[API] ${req.method} ${req.originalUrl} ${req.statusCode} ${Date.now() - start}ms`)
+    })
+
+    next();
+})
 // 將assetsRouter掛載到/assets路徑下，這樣所有以/assets開頭的請求都會交給assetsRouter處理
 app.use('/assets', assetsRouter);
 // 將authRouter掛載到/auth路徑下，這樣所有以/auth開頭的請求都會交給authRouter處理
