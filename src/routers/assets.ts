@@ -1,4 +1,4 @@
-﻿import { Router, type Request } from "express";
+﻿import { Router } from "express";
 import { listAssets, getAsset, updateAsset } from "../services/assetService.js";
 import { validateAssetId, validateUpdateAssetInput } from "../validators/assetValidator.js";
 import { AppError } from "../errors/error.js";

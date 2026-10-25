@@ -9,6 +9,8 @@ export function errorHandler (
     res: Response,
     next: NextFunction
 ) {
+    // 標頭已送出（例如檔案串流傳到一半連線中斷）時不能再改狀態碼，交給 Express 預設處理
+    if (res.headersSent) return next(err)
     // 無法解析json時回400避免造成誤解為server有問題
     if (err instanceof SyntaxError && 'type' in err && err.type === 'entity.parse.failed') {
         const definition = errorDefinition[ErrorCode.INVALID_REQUEST_BODY]

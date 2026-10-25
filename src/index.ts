@@ -5,6 +5,7 @@ import cors from 'cors';
 import { pool } from './db.js';
 import assetsRouter from './routers/assets.js';
 import authRouter from './routers/auth.js';
+import modelRouter from './routers/models.js'
 import { errorHandler } from "./errorHandler.js";
 import { AppError } from "./errors/error.js";
 import { ErrorCode } from "./errors/errorCode.js";
@@ -36,6 +37,8 @@ app.use((req, res, next) => {
 app.use('/assets', assetsRouter);
 // 將authRouter掛載到/auth路徑下，這樣所有以/auth開頭的請求都會交給authRouter處理
 app.use('/auth', authRouter);
+// 將modelRouter掛載到/models路徑下，這樣所有以/models開頭的請求都會交給modelRouter處理
+app.use('/models', modelRouter);
 // server健康度測試
 app.get('/health', (req, res) => {
     res.json({ status: 'ok' });

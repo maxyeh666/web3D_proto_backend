@@ -34,6 +34,10 @@ export const errorDefinition: Record<ErrorCode, ErrorDefinition> = {
         statusCode: 404,
         message: "Route not found"
     },
+    [ErrorCode.MODEL_NOT_FOUND]: {
+        statusCode: 404,
+        message: "Model not found"
+    },
     [ErrorCode.INTERNAL_SERVER_ERROR]: {
         statusCode: 500,
         message: "Internal server error"

@@ -62,7 +62,7 @@ npm run dev       # http://localhost:3000
 - [x] API error handling（4xx / 500 的統一 JSON 回應）
 - [x] `POST /auth/login`：管理者登入，驗密碼後簽發 15 分鐘有效的 JWT（`routers/auth.ts` / `services/authService.ts` / `validators/authValidator.ts`，需 `ADMIN_PASSWORD` 與 `JWT_SECRET`）
 - [x] `PUT /assets/:id` 需管理者權限（`middlewares/requireAdmin.ts`：驗 `Authorization: Bearer <token>` 與 `role === "admin"`）
-- [ ] `GET /models/*`：靜態模型檔（`express.static` 提供，長快取；模型由後端提供，前端不寫死檔案位置）
+- [x] `GET /models/:modelKey`：依 `modelKey` 查白名單表對應檔名，再以 `sendFile` 回傳（快取 `Cache-Control: public, max-age=3600`；模型由後端提供，前端不寫死檔案位置）
 - [x] `model_key` 欄位與 demo 資產 seed（migration `003` / `004`；DB 存 key 不存絕對 URL）
 
 > 目前產品只有一筆 `id` 為 `1` 的資產（前端一次只編輯一筆）。
@@ -113,6 +113,7 @@ npm run dev       # http://localhost:3000
 | GET | `/health/db` | 資料庫連線狀態 | 200 `{ status, database: { connected }, durationMs }`，DB 不可用時 500 |
 | GET | `/assets` | 取得全部資產（摘要，只含辨識欄位） | 200 `AssetSummary[]` |
 | GET | `/assets/:id` | 取得單一資產 | 200 `Asset` |
+| GET | `/models/:modelKey` | 取得模型檔（`modelKey` 查表對應檔名，未登記時 404） | 200 檔案本體：`Content-Type: model/gltf-binary`、`Cache-Control: public, max-age=3600` |
 | POST | `/auth/login` | 管理者登入，驗密碼後簽發 token | 200 `{ token }`，密碼錯誤時 401 |
 | PUT | `/assets/:id` | 更新單一資產（需管理者 token：`Authorization: Bearer <token>`） | 200 `Asset`，未帶 token 時 401、非管理者時 403 |
 
@@ -133,7 +134,7 @@ npm run dev       # http://localhost:3000
 - 400 — `INVALID_ASSET_ID` / `INVALID_REQUEST_BODY`
 - 401 — `INVALID_CREDENTIALS`（登入密碼錯誤）/ `UNAUTHORIZED`（未帶 token 或 token 無效）
 - 403 — `FORBIDDEN`（token 有效但不是管理者）
-- 404 — `ASSET_NOT_FOUND` / `ROUTE_NOT_FOUND`
+- 404 — `ASSET_NOT_FOUND` / `MODEL_NOT_FOUND` / `ROUTE_NOT_FOUND`
 - 500 — `INTERNAL_SERVER_ERROR`
 
 驗證規則見 `src/validators/assetValidator.ts`。
@@ -188,6 +189,10 @@ assets 資料表
 ]
 ```
 
+### 模型檔案
+
+資產只存 `modelKey`，模型檔由 `GET /models/:modelKey` 提供。`src/routers/models.ts` 的 `MODEL_FIELDS` 是白名單查表（例如 `materials-variants-shoe` → `MaterialsVariantsShoe.glb`），未登記的 key 回 `MODEL_NOT_FOUND` 404；檔案放在後端根目錄的 `models/`（與第三方授權標註同目錄），不是 `public/`。
+
 ## Project Structure
 
 ```text
@@ -207,7 +212,8 @@ src/
 │   └── requireAdmin.ts   ← 驗管理者 token（Bearer）與 role
 ├── routers/
 │   ├── assets.ts         ← /assets 路由：HTTP 進出與狀態碼
-│   └── auth.ts           ← /auth 路由：登入發 token
+│   ├── auth.ts           ← /auth 路由：登入發 token
+│   └── models.ts         ← /models 路由：依 modelKey 查白名單表回傳 .glb
 ├── services/
 │   ├── assetService.ts   ← Asset 的 SQL 與資料形狀轉換
 │   └── authService.ts    ← 驗密碼並簽發 JWT
@@ -223,6 +229,16 @@ src/
 ```
 
 分層：`routers` 只處理 HTTP（驗證、狀態碼），`services` 只處理業務邏輯（`assetService` 是 SQL 與資料形狀、`authService` 是驗密碼並簽發 token），`validators` 只做輸入驗證，`middlewares` 只做跨路由的檢查，`errors` 只定義錯誤與查表，`errorHandler` 只轉 JSON。
+
+```text
+models/
+├── MaterialsVariantsShoe.glb ← KHR_materials_variants 範例模型（約 7.8MB）
+└── ATTRIBUTION.md            ← 第三方資產授權標註
+```
+
+## Third-party Assets
+
+`models/` 下的模型檔案為第三方資產，各自依其授權條款使用，詳見 [models/ATTRIBUTION.md](./models/ATTRIBUTION.md)。
 
 ## Related Project
 
