@@ -124,7 +124,8 @@ npm run dev       # http://localhost:3000
   "name": "Default Cube",
   "config": {
     "camera": { "position": [3, 5, 5], "fov": 60 },
-    "cube": { "color": "#999999" }
+    "cube": { "color": "#999999" },
+    "model": { "materialColorOverrides": {} }
   }
 }
 ```
@@ -137,7 +138,7 @@ npm run dev       # http://localhost:3000
 - 404 — `ASSET_NOT_FOUND` / `MODEL_NOT_FOUND` / `ROUTE_NOT_FOUND`
 - 500 — `INTERNAL_SERVER_ERROR`
 
-驗證規則見 `src/validators/assetValidator.ts`。
+驗證規則見 `src/validators/assetValidator.ts`（`model` 可省略；出現時材質槽 id 不可為空、顏色只收 `#rrggbb`）。
 
 目前不提供 OpenAPI 規格或 `/docs` 頁面；API 契約以上面的端點表格與錯誤碼為準。
 
@@ -174,7 +175,8 @@ assets 資料表
   "name": "Default Cube",
   "config": {
     "camera": { "position": [3, 5, 5], "fov": 60 },
-    "cube": { "color": "#999999" }
+    "cube": { "color": "#999999" },
+    "model": { "materialColorOverrides": {} }
   },
   "updatedAt": "2026-10-03T00:00:00.000Z",
   "modelKey": "default-cube"

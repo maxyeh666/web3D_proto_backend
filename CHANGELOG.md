@@ -2,6 +2,30 @@
 
 開發日誌：依日期記錄後端各階段的變更與設計決策。每則包含背景（為何做）、變更（做了什麼）、設計決策（為何這樣做）、已知限制 / 後續。學習筆記另外放在 [LEARNING.md](./LEARNING.md)。
 
+## 2026-10-30 — config.model 材質顏色覆寫的驗證
+
+**背景**
+- 前端開始把材質改色寫進 `config.model.materialColorOverrides` 並隨 Save 打 `PUT`；後端原先只驗 `camera` / `cube`，`model` 會整包被當成未知欄位照收，等於沒有驗證。
+- 但 `model` 是新欄位，舊資料沒有；直接設為必填會讓既有資料的後續請求全部被 400。
+
+**變更**
+- `src/validators/assetValidator.ts`：新增 `ModelConfig` 型別（`materialColorOverrides: Record<string, string>`，key 為材質槽 id、值為 `#rrggbb`）與 `isModelConfig`；`isAssetConfig` 在 `model` 缺失時放行、出現時嚴格驗；`validateUpdateAssetInput` 一律回傳補齊後的 `model`（缺就給 `{ materialColorOverrides: {} }`）。不需 migration：`config` 本來就是 JSONB。
+
+**設計決策**
+- `model` 可省略：舊資料相容，避免前端一上線就 400（屬於新增欄位的過渡寫法，欄位穩定後應改必填並清理舊資料）。
+- 顏色只收 6 位 hex（`^#[0-9a-fA-F]{6}$`）：前端唯一寫入來源是 `<input type="color">`（固定輸出 6 位）；放寬只會讓打錯的值靜默進 DB，前端套色時才失敗。
+- key 不可為空：空 key 代表前端算錯，存進去只會多一筆永遠對不上的資料。
+- 用 `Object.entries` 而非 `Object.values`：值為字串時，解構 `([materialId, color])` 會把 `"#ff0000"` 逐字拆成 `"#"` 與 `"f"`，合法資料全被拒；`entries` 才能同時拿到 key 與值。
+
+**學習筆記**
+1 則，見 [LEARNING.md](./LEARNING.md) 的 2026-10-30 段。
+
+**已知限制 / 後續**
+- 材質槽 id 的格式由前端決定，後端只驗「非空字串」不驗格式；前端 id 規則改變時，舊覆寫只會靜默失效，不會報錯。
+
+---
+
+
 ## 2026-10-25 — 模型端點 GET /models/:modelKey
 
 **背景**
