@@ -1,4 +1,4 @@
-# Web 3D Viewer Backend
+﻿# Web 3D Viewer Backend
 
 Web 3D Viewer 的 Backend Prototype，負責 Asset API 與把資料存進資料庫。
 
@@ -50,7 +50,7 @@ npm run dev       # http://localhost:3000
 
 - [x] PostgreSQL（本機安裝）
 - [x] 資料存取方式（直接用 `pg` 寫 SQL）
-- [x] Migration（`migrate.ts` + `000` / `001` / `002`，`npm run migrate` 可重複跑）
+- [x] Migration（`migrate.ts` + `000`–`004`，`npm run migrate` 可重複跑）
 - [x] Asset Model（`assets` 資料表：`BIGINT` 主鍵 + `JSONB` + `TIMESTAMPTZ`）
 
 ### Phase 3 — Asset API
@@ -65,8 +65,12 @@ npm run dev       # http://localhost:3000
 - [x] `GET /models/:modelKey`：依 `modelKey` 查白名單表對應檔名，再以 `sendFile` 回傳（快取 `Cache-Control: public, max-age=3600`；模型由後端提供，前端不寫死檔案位置）
 - [x] `model_key` 欄位與 demo 資產 seed（migration `003` / `004`；DB 存 key 不存絕對 URL）
 
-> 目前產品只有一筆 `id` 為 `1` 的資產（前端一次只編輯一筆）。
-> 這個後端是給 3D Viewer 用的：資產由種子資料（或之後的後台）提供，App 本身不新增、也不刪除資產，
+> 資料庫內容分兩層：migration 只建立一筆預設資產（`id` 為 `1` 的 Default Cube，cube 模式）；
+> 線上 demo 另外手動寫入一筆對應 GLB 的資產（`materials-variants-shoe`）。
+> 第二筆不在 migration 內，用本 repo 從零建置只會得到一筆；要重現線上 demo，執行 Phase 5 的「重現 demo 資料」SQL。
+> 這個取捨的理由：migration 放可重建的結構與必要資料，示範資料會隨 demo 調整，寫進 migration 等於每改一次內容就要新增一支。
+>
+> 這個後端是給 3D Viewer 用的：資產由資料庫提供（migration 的 seed 或手動寫入），App 本身不新增、也不刪除資產，
 > 所以沒有 `POST` / `DELETE`；`PATCH /assets/:id` 暫不實作，日後依需求評估。
 > 前端會用到的就是 `GET /assets`（挑一筆）、`GET /assets/:id`（拿完整內容）、`PUT /assets/:id`（存回去）
 > （`web3D_proto_react` 的 `src/hooks/useAssetConfig.ts`）。
@@ -84,13 +88,27 @@ npm run dev       # http://localhost:3000
 - [x] 後端部署到託管平台
 - [x] 資料庫改用雲端 PostgreSQL
 - [x] 設定正式環境變數（`PORT`、`DATABASE_URL`、`CORS_ORIGIN`、`ADMIN_PASSWORD`、`JWT_SECRET`）
-- [ ] 冷啟動實測與前端提示對齊（Neon 喚醒期間由前端顯示啟動提示 + GET 自動重試；實測後補上量測結果，取代「處理喚醒」這種像待開發功能的寫法）
+- [x] 冷啟動實測與前端提示對齊（2026-11-01 實測：休眠後首次請求約 50–52 秒，大多在 1 分鐘內。前段等待由前端 5 秒慢速提示、GET 自動重試 2 次、逾時上限 65 秒涵蓋，餘裕約 13 秒）
 
 部署筆記（Render）：
 - Build Command 用 `npm ci && npm run migrate && npm run build`，Start Command 用 `npm run start`。build 階段會先自動跑 migration 再編譯；`npm run build` 只做 `tsc`，不會把 `src/migrations/*.sql` 複製到 `dist/`。若 Render build 失敗（例如某支 migration 有誤），該次部署會被取消、舊版本繼續運作，線上服務不受影響。
 - `/health/db` 成功回 200（含 `durationMs`），資料庫連不上時回 500。
 - 連線池的 `statement_timeout: 5000` 同時套用到 `migrate.ts`（同一顆 pool），超過 5 秒的 migration 會被中斷。
 - 部署後驗證：`/health/db` 有 `durationMs`、`/assets` 的 CORS 標頭正確、`/assets/999` 回 404、前端改色後 Save 並重載仍保留（需管理者 token，見 PUT 說明）、Render log 開頭有 `Using Node version v24.x.x`。
+
+重現 demo 資料（migration 只有第一筆）：
+
+```sql
+INSERT INTO assets (name, config, model_key)
+SELECT 'Materials Variants Shoe', config, 'materials-variants-shoe'
+FROM assets WHERE id = 1;
+```
+
+以第一筆的 `config` 為底，只換名稱與 `model_key`。`config` 是 `NOT NULL`（`001_create_assets.sql`）、沒有預設值，
+所以不能只寫 `(name, model_key)`；用 `SELECT ... FROM assets WHERE id = 1` 複製既有設定，欄位形狀才不會出錯。
+執行後 `GET /assets` 會回兩筆，前端即可示範切換。
+
+`WHERE id = 1` 是可靠的，不是巧合：`id` 是 `BIGINT GENERATED ALWAYS AS IDENTITY`（資料庫自動編號，從 1 開始），`002_seed_default_asset.sql` 又是建置後的第一筆寫入；全新環境的第一筆資產一定是 `id = 1` 的 Default Cube。
 
 ## Tech Stack
 
