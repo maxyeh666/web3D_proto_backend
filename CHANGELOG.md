@@ -1,39 +1,31 @@
-﻿# Changelog
+﻿﻿# Changelog
 
 開發日誌：依日期記錄後端各階段的變更與設計決策。每則包含背景（為何做）、變更（做了什麼）、設計決策（為何這樣做）、已知限制 / 後續。學習筆記另外放在 [LEARNING.md](./LEARNING.md)。
 
-## 2026-11-01 — demo 資料的分層說明
+## 2026-11-01 — 冷啟動實測與 demo 資料分層說明
 
 **背景**
 - `README.md` 原寫「目前產品只有一筆 `id` 為 `1` 的資產」，但線上 demo 實際有兩筆：第二筆是手動寫入、對應 GLB 的 `materials-variants-shoe`，不在任何 migration 內。
 - 依本 repo 從零建置永遠只會得到一筆，讀者照文件做出的環境與線上 demo 不同，卻查不到原因。
-
-**變更**
-- `README.md`：Phase 3 引言改成分層敘述（migration 的 1 筆 seed＋線上 demo 手動的 1 筆，以及示範資料為何不進 migration）；Phase 2 的 migration 清單補為 `000`–`004`。
-- `README.md`：Phase 5 新增「重現 demo 資料」SQL（以第一筆的 `config` 為底複製，繞開 `config NOT NULL` 無預設值的限制），並註明 `WHERE id = 1` 可靠的理由。
-
-**設計決策**
-- 不為第二筆寫 seed migration：示範資料會隨 demo 調整，寫進 migration 等於每改一次內容就要新增一支；手動資料的可重現性由文件承擔。
-- `WHERE id = 1` 可靠的理由：`id` 是 `BIGINT GENERATED ALWAYS AS IDENTITY`（自增編號、從 1 開始），`002` 是建置後第一筆寫入，全新環境的第一筆一定是 `id = 1`。
-
-**已知限制 / 後續**
-- 這個保證只對「照 migration 從零建置」的環境成立；若線上 DB 曾手動刪除或重建過第一筆，貼 SQL 前先 `SELECT id, name, model_key FROM assets;` 確認。---
-
-## 2026-11-01 — 冷啟動實測
-
-**背景**
 - 後端在 Render 免費方案、資料庫在 Neon 免費方案，閒置後會休眠；Phase 5 的冷啟動實測一直沒量，文件只能寫「數十秒量級」。
 - 前端對應機制（65 秒逾時、GET 重試 2 次、載入超過 5 秒顯示慢速提示）早在 10-22 完成，缺的是確認這些數字夠不夠。
 
 **變更**
+- `README.md`：Phase 3 引言改成分層敘述（migration 的 1 筆 seed＋線上 demo 手動的 1 筆，以及示範資料為何不進 migration）；Phase 2 的 migration 清單補為 `000`–`004`。
+- `README.md`：Phase 5 新增「重現 demo 資料」SQL（以第一筆的 `config` 為底複製，繞開 `config NOT NULL` 無預設值的限制），並註明 `WHERE id = 1` 可靠的理由。
 - `README.md`：Phase 5 的冷啟動實測打勾，並填入量測結果（休眠後首次請求約 50–52 秒，大多在 1 分鐘內）。
 
 **設計決策**
+- 不為第二筆寫 seed migration：示範資料會隨 demo 調整，寫進 migration 等於每改一次內容就要新增一支；手動資料的可重現性由文件承擔。
+- `WHERE id = 1` 可靠的理由：`id` 是 `BIGINT GENERATED ALWAYS AS IDENTITY`（自增編號、從 1 開始），`002` 是建置後第一筆寫入，全新環境的第一筆一定是 `id = 1`。
 - 逾時 65 秒維持不變：多次量測落在 50–52 秒，餘裕約 13 秒；調高會讓真正的失敗多等，調低則可能把「正在啟動」誤判成逾時。
 - 不為此改程式：前端 5 秒提示與 GET 重試已能涵蓋這段等待，量測結果只影響文件敘述。
 
 **已知限制 / 後續**
-- 量測次數有限，喚醒時間會隨平台負載波動；若日後常態超過 60 秒，需重新評估 65 秒上限。---
+- 這個保證只對「照 migration 從零建置」的環境成立；若線上 DB 曾手動刪除或重建過第一筆，貼 SQL 前先 `SELECT id, name, model_key FROM assets;` 確認。
+- 量測次數有限，喚醒時間會隨平台負載波動；若日後常態超過 60 秒，需重新評估 65 秒上限。
+
+---
 
 ## 2026-10-30 — config.model 材質顏色覆寫的驗證
 
